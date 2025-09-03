@@ -526,26 +526,8 @@ def display_document_clean(doc: Dict, search_terms: List[str] = None, show_clust
     </div>
     """, unsafe_allow_html=True)
 
-
 def display_cluster_overview(df: pd.DataFrame):
-    # """Display overview of all clusters."""
-    # st.markdown("## 📚 Document Clusters Overview")
-    # st.markdown("*Each cluster contains documents with similar content. Click on a cluster to explore all documents.*")
-    # # Quick stats
-    # col1, col2, col3, col4 = st.columns(4)
-    # with col1:
-    #     st.metric("📄 Documents", f"{len(df):,}")
-    # with col2:
-    #     st.metric("🗂️ Clusters", df['cluster_id'].nunique())
-    # with col3:
-    #     avg_confidence = df['certainty'].mean()
-    #     st.metric("🎯 Avg Confidence", f"{avg_confidence:.0%}")
-    # with col4:
-    #     if 'batch_id' in df.columns:
-    #         batches = df['batch_id'].nunique()
-    #         st.metric("📦 Batches", batches)
-    # st.markdown("---")
-    # Group by cluster
+    # Compute cluster stats
     cluster_stats = (
         df.groupby('cluster_id')
         .agg(
@@ -560,26 +542,73 @@ def display_cluster_overview(df: pd.DataFrame):
         by=['avg_confidence', 'size'],
         ascending=[False, False]
     )
-    total_clusters = len(cluster_stats)
-    # Pagination for large numbers of clusters
-    if total_clusters > 20:
-        st.info(
-            f"📊 Large corpus detected ({total_clusters} clusters). Showing in pages, sorted by confidence and size.")
-        clusters_per_page = 10
-        total_pages = (total_clusters - 1) // clusters_per_page + 1
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            current_page = st.selectbox(
-                "Choose cluster page:",
-                options=range(1, total_pages + 1),
-                format_func=lambda
-                    x: f"Page {x} (Clusters {(x - 1) * clusters_per_page + 1}-{min(x * clusters_per_page, total_clusters)})"
+
+    # --- FILTERS in an expandable section ---
+    with st.expander("⚙️ Filter Clusters", expanded=False):
+        min_size, max_size = int(cluster_stats['size'].min()), int(cluster_stats['size'].max())
+        min_conf, max_conf = float(cluster_stats['avg_confidence'].min()), float(cluster_stats['avg_confidence'].max())
+
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_min_size = st.number_input(
+                "Minimum Cluster Size",
+                min_value=min_size,
+                max_value=max_size,
+                value=min_size,
+                step=1,
+                key="filter_min_size"
             )
-        start_idx = (current_page - 1) * clusters_per_page
-        end_idx = min(start_idx + clusters_per_page, total_clusters)
-        clusters_to_show = cluster_stats.iloc[start_idx:end_idx]
-    else:
-        clusters_to_show = cluster_stats
+            selected_max_size = st.number_input(
+                "Maximum Cluster Size",
+                min_value=min_size,
+                max_value=max_size,
+                value=max_size,
+                step=1,
+                key="filter_max_size"
+            )
+        with col2:
+            selected_min_conf = st.slider(
+                "Minimum Avg Confidence",
+                min_value=0.0,
+                max_value=1.0,
+                value=min_conf,
+                step=0.01,
+                key="filter_min_conf"
+            )
+            selected_max_conf = st.slider(
+                "Maximum Avg Confidence",
+                min_value=0.0,
+                max_value=1.0,
+                value=max_conf,
+                step=0.01,
+                key="filter_max_conf"
+            )
+
+    # Apply filters
+    filtered_clusters = cluster_stats[
+        (cluster_stats['size'] >= selected_min_size) &
+        (cluster_stats['size'] <= selected_max_size) &
+        (cluster_stats['avg_confidence'] >= selected_min_conf) &
+        (cluster_stats['avg_confidence'] <= selected_max_conf)
+    ]
+
+    total_clusters = len(filtered_clusters)
+    if total_clusters == 0:
+        st.warning("No clusters match the filter criteria.")
+        return
+
+    # Pagination
+    clusters_per_page = 10
+    total_pages = (total_clusters - 1) // clusters_per_page + 1
+    current_page = st.selectbox(
+        "Choose cluster page:",
+        options=range(1, total_pages + 1),
+        format_func=lambda x: f"Page {x} (Clusters {(x - 1) * clusters_per_page + 1}-{min(x * clusters_per_page, total_clusters)})"
+    )
+    start_idx = (current_page - 1) * clusters_per_page
+    end_idx = min(start_idx + clusters_per_page, total_clusters)
+    clusters_to_show = filtered_clusters.iloc[start_idx:end_idx]
+
     # Display clusters
     for _, row in clusters_to_show.iterrows():
         cluster_id = row['cluster_id']
@@ -588,7 +617,6 @@ def display_cluster_overview(df: pd.DataFrame):
         batch_info = f" • Spans {row['batches']} batch{'es' if row['batches'] != 1 else ''}" if 'batches' in row else ""
         col1, col2 = st.columns([3, 1])
         with col1:
-            # Inside your loop for each cluster:
             st.markdown(f"""
             <div class="cluster-header">
                 <h3 style="margin: 0; color: white;">🗂️ Cluster {cluster_id}</h3>
@@ -598,7 +626,6 @@ def display_cluster_overview(df: pd.DataFrame):
             </div>
             """, unsafe_allow_html=True)
 
-            # Document previews: each preview and confidence on a single row
             cluster_docs = df[df['cluster_id'] == cluster_id]
             top_docs = cluster_docs.nlargest(3, 'certainty')
             for idx, (_, doc) in enumerate(top_docs.iterrows()):
@@ -609,13 +636,13 @@ def display_cluster_overview(df: pd.DataFrame):
                 </div>
                 """, unsafe_allow_html=True)
 
-            # Button underneath previews
             if st.button(f"📖 View All {cluster_size} Documents", key=f"view_cluster_{cluster_id}"):
                 st.session_state.view_mode = 'cluster'
                 st.session_state.selected_cluster = cluster_id
                 st.rerun()
 
             st.markdown("---")
+
 
 
 def display_cluster_details(df: pd.DataFrame, cluster_id: int):
@@ -969,7 +996,6 @@ def main():
                     st.session_state.view_mode = 'overview'
                     st.session_state.processing = False
                     st.success("✅ Analysis complete!")
-                    st.balloons()
                     # Store performance summary for later display
                     df_results = pd.DataFrame(results)
                     logger.store_summary(len(texts), df_results['cluster_id'].nunique())

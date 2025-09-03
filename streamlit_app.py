@@ -1,3 +1,10 @@
+try:
+    import GPUtil
+    GPU_AVAILABLE = True
+except ImportError:
+    GPUtil = None
+    GPU_AVAILABLE = False
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -57,6 +64,8 @@ class PerformanceLogger:
             self.peak_cpu = current_cpu
 
     def update_peak_gpu(self):
+        if not GPUtil:
+            return
         try:
             gpus = GPUtil.getGPUs()
             if gpus:
@@ -64,7 +73,7 @@ class PerformanceLogger:
                 if current_gpu > self.peak_gpu:
                     self.peak_gpu = current_gpu
         except:
-            pass  # No GPU available
+            pass
 
     def get_summary(self, num_texts, num_clusters):
         total_time = time.time() - self.start_time

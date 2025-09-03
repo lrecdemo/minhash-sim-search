@@ -447,7 +447,7 @@ def display_document_clean(doc: Dict, search_terms: List[str] = None, show_clust
                            is_preview: bool = False):
     """Display document with proper styling."""
     search_terms = search_terms or []
-
+    doc_id = doc.get('id', doc['original_index']) if 'id' in doc else doc['original_index']
     if show_cluster_info:
         col1, col2, col3 = st.columns([1, 2, 1])
         with col1:
@@ -459,24 +459,19 @@ def display_document_clean(doc: Dict, search_terms: List[str] = None, show_clust
                 st.markdown(f"*Batch {doc['batch_id']}*")
     else:
         st.markdown(get_confidence_emoji_and_text(doc['certainty']))
-
     display_text = doc['text']
-
     if is_preview and len(display_text) > 300:
         display_text = display_text[:300] + "..."
-
     if search_terms:
         for term in search_terms:
             if term.strip():
                 display_text = display_text.replace(term, f"**{term}**")
                 display_text = display_text.replace(term.lower(), f"**{term.lower()}**")
                 display_text = display_text.replace(term.upper(), f"**{term.upper()}**")
-
     container_class = "preview-container" if is_preview else "document-container"
-
     st.markdown(f"""
     <div class="{container_class}">
-        {display_text}
+        <strong>{doc_id}:</strong> {display_text}
     </div>
     """, unsafe_allow_html=True)
 
@@ -485,7 +480,6 @@ def display_cluster_overview(df: pd.DataFrame):
     """Display overview of all clusters."""
     st.markdown("## 📚 Document Clusters Overview")
     st.markdown("*Each cluster contains documents with similar content. Click on a cluster to explore all documents.*")
-
     # Quick stats
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -499,9 +493,7 @@ def display_cluster_overview(df: pd.DataFrame):
         if 'batch_id' in df.columns:
             batches = df['batch_id'].nunique()
             st.metric("📦 Batches", batches)
-
     st.markdown("---")
-
     # Group by cluster
     cluster_stats = (
         df.groupby('cluster_id')
@@ -513,14 +505,11 @@ def display_cluster_overview(df: pd.DataFrame):
         )
         .reset_index()
     )
-
     cluster_stats = cluster_stats.sort_values(
         by=['avg_confidence', 'size'],
         ascending=[False, False]
     )
-
     total_clusters = len(cluster_stats)
-
     # Pagination for large numbers of clusters
     if total_clusters > 20:
         st.info(
@@ -535,60 +524,53 @@ def display_cluster_overview(df: pd.DataFrame):
                 format_func=lambda
                     x: f"Page {x} (Clusters {(x - 1) * clusters_per_page + 1}-{min(x * clusters_per_page, total_clusters)})"
             )
-
         start_idx = (current_page - 1) * clusters_per_page
         end_idx = min(start_idx + clusters_per_page, total_clusters)
         clusters_to_show = cluster_stats.iloc[start_idx:end_idx]
     else:
         clusters_to_show = cluster_stats
-
     # Display clusters
     for _, row in clusters_to_show.iterrows():
         cluster_id = row['cluster_id']
         cluster_size = row['size']
         avg_confidence = row['avg_confidence']
         batch_info = f" • Spans {row['batches']} batch{'es' if row['batches'] != 1 else ''}" if 'batches' in row else ""
-
-        st.markdown(f"""
-        <div class="cluster-header">
-            <h3 style="margin: 0; color: white;">🗂️ Cluster {cluster_id}</h3>
-            <p style="margin: 0.5rem 0 0 0; opacity: 0.9; color: white;">
-                {cluster_size} documents • {avg_confidence:.0%} avg confidence{batch_info}
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        cluster_docs = df[df['cluster_id'] == cluster_id]
-        top_docs = cluster_docs.nlargest(3, 'certainty')
-
         col1, col2 = st.columns([3, 1])
         with col1:
+            # Inside your loop for each cluster:
+            st.markdown(f"""
+            <div class="cluster-header">
+                <h3 style="margin: 0; color: white;">🗂️ Cluster {cluster_id}</h3>
+                <p style="margin: 0.5rem 0 0 0; opacity: 0.9; color: white;">
+                    {cluster_size} documents • {avg_confidence:.0%} avg confidence{batch_info}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Document previews: each preview and confidence on a single row
+            cluster_docs = df[df['cluster_id'] == cluster_id]
+            top_docs = cluster_docs.nlargest(3, 'certainty')
             for idx, (_, doc) in enumerate(top_docs.iterrows()):
-                st.markdown(f"**Preview {idx + 1}:**")
-                display_document_clean(doc.to_dict(), show_cluster_info=False, is_preview=True)
+                doc_id = doc.get('id', doc['original_index']) if 'id' in doc else doc['original_index']
+                st.markdown(f"""
+                <div style="margin-bottom: 0.5rem;">
+                    <strong>Preview {idx + 1}:</strong> {doc_id}: {doc['text'][:100]}... <span style="color: #667eea;">{get_confidence_emoji_and_text(doc['certainty'])}</span>
+                </div>
+                """, unsafe_allow_html=True)
 
-            if len(cluster_docs) > 3:
-                if st.button(f"… and {len(cluster_docs) - 3} more documents", key=f"more_docs_cluster_{cluster_id}"):
-                    st.session_state.view_mode = 'cluster'
-                    st.session_state.selected_cluster = cluster_id
-                    st.rerun()
-
-        with col2:
-            st.markdown("")
+            # Button underneath previews
             if st.button(f"📖 View All {cluster_size} Documents", key=f"view_cluster_{cluster_id}"):
                 st.session_state.view_mode = 'cluster'
                 st.session_state.selected_cluster = cluster_id
                 st.rerun()
 
-        st.markdown("---")
+            st.markdown("---")
 
 
 def display_cluster_details(df: pd.DataFrame, cluster_id: int):
     """Display all documents in a specific cluster."""
     cluster_docs = df[df['cluster_id'] == cluster_id].copy()
-
     col1, col2 = st.columns([3, 1])
-
     with col1:
         st.markdown(f"# 📚 Cluster {cluster_id} - All Documents")
         batch_info = ""
@@ -597,26 +579,21 @@ def display_cluster_details(df: pd.DataFrame, cluster_id: int):
             batch_info = f" • Spans {batches} batch{'es' if batches != 1 else ''}"
         st.markdown(
             f"**{len(cluster_docs)} documents • {cluster_docs['certainty'].mean():.0%} avg confidence{batch_info}**")
-
     with col2:
         if st.button("← Back to Overview", type="secondary"):
             st.session_state.view_mode = 'overview'
             st.rerun()
-
     if len(cluster_docs) > 100:
         st.warning(
             f"⚡ Large cluster detected ({len(cluster_docs)} documents). Consider using search to find specific documents.")
-
     # Search and sort controls
     search_col1, search_col2 = st.columns([3, 1])
-
     with search_col1:
         search_query = st.text_input(
             "🔍 Search within this cluster:",
             placeholder="Enter words or phrases to find specific documents...",
             key=f"search_cluster_{cluster_id}"
         )
-
     with search_col2:
         sort_option = st.selectbox(
             "Sort by:",
@@ -625,22 +602,18 @@ def display_cluster_details(df: pd.DataFrame, cluster_id: int):
                 x],
             key=f"sort_cluster_{cluster_id}"
         )
-
     # Filter and sort documents
     filtered_docs = cluster_docs.copy()
     search_terms = []
-
     if search_query.strip():
         search_terms = [term.strip() for term in search_query.split() if term.strip()]
         mask = cluster_docs['text'].str.contains(search_query.strip(), case=False, na=False)
         search_filtered = cluster_docs[mask]
-
         if len(search_filtered) == 0:
             st.warning(f"No documents found containing '{search_query}' in this cluster.")
         else:
             st.success(f"Found {len(search_filtered)} documents matching '{search_query}'")
             filtered_docs = search_filtered
-
     # Sort documents
     if sort_option == "confidence":
         filtered_docs = filtered_docs.sort_values('certainty', ascending=False)
@@ -649,13 +622,10 @@ def display_cluster_details(df: pd.DataFrame, cluster_id: int):
     elif sort_option == "length":
         filtered_docs['text_length'] = filtered_docs['text'].str.len()
         filtered_docs = filtered_docs.sort_values('text_length', ascending=False)
-
     # Pagination for large clusters
     docs_per_page = 50 if len(filtered_docs) > 100 else len(filtered_docs)
-
     if len(filtered_docs) > 50:
         total_pages = (len(filtered_docs) - 1) // docs_per_page + 1
-
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             current_page = st.selectbox(
@@ -665,23 +635,19 @@ def display_cluster_details(df: pd.DataFrame, cluster_id: int):
                     x: f"Page {x} (Documents {(x - 1) * docs_per_page + 1}-{min(x * docs_per_page, len(filtered_docs))})",
                 key=f"page_selector_{cluster_id}"
             )
-
         start_idx = (current_page - 1) * docs_per_page
         end_idx = min(start_idx + docs_per_page, len(filtered_docs))
         page_docs = filtered_docs.iloc[start_idx:end_idx]
     else:
         page_docs = filtered_docs
-
     # Display documents
     st.markdown(f"### 📄 Documents ({len(page_docs)} of {len(filtered_docs)} shown)")
-
     for i, (_, doc) in enumerate(page_docs.iterrows()):
         expand_default = (i < 5) and (len(page_docs) <= 20)
-
-        with st.expander(f"Document #{doc['original_index']} - {get_confidence_level(doc['certainty'])} Confidence",
+        doc_id = doc.get('id', doc['original_index']) if 'id' in doc else doc['original_index']
+        with st.expander(f"Document #{doc_id} - {get_confidence_level(doc['certainty'])} Confidence",
                          expanded=expand_default):
-            display_document_clean(doc.to_dict(), search_terms, show_cluster_info=False)
-
+            st.markdown(f"**{doc_id}:** {doc['text']}")
             cols = st.columns(4) if 'batch_id' in doc else st.columns(3)
             with cols[0]:
                 st.caption(f"Original Position: #{doc['original_index']}")
@@ -697,16 +663,13 @@ def display_cluster_details(df: pd.DataFrame, cluster_id: int):
 def display_global_search(df: pd.DataFrame):
     """Display global search across all documents."""
     st.markdown("## 🔍 Search All Documents")
-
     search_col1, search_col2 = st.columns([3, 1])
-
     with search_col1:
         global_search = st.text_input(
             "Search across all documents:",
             placeholder="Enter keywords to find documents across all clusters...",
             key="global_search"
         )
-
     with search_col2:
         min_confidence = st.selectbox(
             "Minimum confidence:",
@@ -714,28 +677,22 @@ def display_global_search(df: pd.DataFrame):
             format_func=lambda x: f"{x:.0%}+",
             index=0
         )
-
     if global_search.strip():
         search_terms = [term.strip() for term in global_search.split() if term.strip()]
         mask = df['text'].str.contains(global_search.strip(), case=False, na=False)
         confidence_mask = df['certainty'] >= min_confidence
-
         results = df[mask & confidence_mask].copy()
         results = results.sort_values('certainty', ascending=False)
-
         if len(results) > 0:
             st.success(
                 f"Found {len(results)} documents matching '{global_search}' with {min_confidence:.0%}+ confidence")
-
             result_clusters = results.groupby('cluster_id')
-
             for cluster_id, group in result_clusters:
                 st.markdown(f"#### 🗂️ From Cluster {cluster_id} ({len(group)} documents)")
-
                 for idx, (_, doc) in enumerate(group.head(5).iterrows()):
+                    doc_id = doc.get('id', doc['original_index']) if 'id' in doc else doc['original_index']
                     st.markdown(f"**Result {idx + 1}:**")
-                    display_document_clean(doc.to_dict(), search_terms, is_preview=True)
-
+                    st.markdown(f"**{doc_id}:** {doc['text']}")
                 if len(group) > 5:
                     if st.button(f"View all {len(group)} results from Cluster {cluster_id}",
                                  key=f"view_search_cluster_{cluster_id}"):
@@ -775,9 +732,14 @@ def run_clustering_analysis(texts: List[str], threshold: float, progress_placeho
         clustered_docs = clustering_service.cluster_documents_optimized(texts, progress_callback)
 
         # Convert to dict format
+        # In run_clustering_analysis, update the result conversion:
         result = []
-        for doc in clustered_docs:
+        for i, doc in enumerate(clustered_docs):
+            doc_id = st.session_state.get('file_data').iloc[doc.original_index].get(st.session_state.selected_id_column,
+                                                                                    doc.original_index) \
+                if st.session_state.selected_id_column else doc.original_index
             result.append({
+                "id": doc_id,
                 "text": doc.text,
                 "cluster_id": doc.cluster_id,
                 "certainty": round(doc.certainty, 4),
@@ -793,6 +755,13 @@ def run_clustering_analysis(texts: List[str], threshold: float, progress_placeho
 
 
 def main():
+    # Handle URL parameters for cluster navigation
+    params = st.experimental_get_query_params()
+    if "view_mode" in params and "selected_cluster" in params:
+        if params["view_mode"][0] == "cluster":
+            st.session_state.view_mode = "cluster"
+            st.session_state.selected_cluster = int(params["selected_cluster"][0])
+
     # Sidebar
     with st.sidebar:
         if st.button("🔄 Clear Cache & Reset"):
@@ -823,10 +792,9 @@ def main():
             uploaded_file = st.file_uploader(
                 "Choose a CSV file with your texts",
                 type=['csv'],
-                help="Your CSV must have a column named 'text' containing the documents to analyze",
+                help="Your CSV must have a column named 'text' containing the documents to analyze. Optionally, you can select an ID column.",
                 key="file_uploader"
             )
-
             if uploaded_file is not None:
                 try:
                     # Store file data in session state immediately
@@ -837,11 +805,28 @@ def main():
                         uploaded_file.seek(0)  # Reset file pointer
                     else:
                         df_preview = st.session_state.file_data
-
                     text_columns = [col for col in df_preview.columns if col.lower().strip() == 'text']
                     if text_columns:
                         st.success(f"✅ Found {len(df_preview):,} documents in column '{text_columns[0]}'")
-
+                        # Find possible ID columns
+                        possible_id_columns = [col for col in df_preview.columns if
+                                               col.lower().strip() in ['id', 'doc_id', 'document_id', 'index',
+                                                                       'number']]
+                        if possible_id_columns:
+                            if 'selected_id_column' not in st.session_state or st.session_state.get(
+                                    'file_name') != uploaded_file.name:
+                                st.session_state.selected_id_column = possible_id_columns[0]
+                            selected_id_column = st.selectbox(
+                                "Select ID column (optional):",
+                                options=["(None)"] + possible_id_columns,
+                                index=0 if 'selected_id_column' not in st.session_state else possible_id_columns.index(
+                                    st.session_state.selected_id_column) + 1,
+                                key="id_column_select"
+                            )
+                            st.session_state.selected_id_column = selected_id_column if selected_id_column != "(None)" else None
+                        else:
+                            st.session_state.selected_id_column = None
+                            st.info("ℹ️ No ID column detected. Using document index as ID.")
                         if len(df_preview) > 50000:
                             st.error("❌ Maximum 50,000 documents supported for Streamlit deployment")
                             st.session_state.file_data = None
@@ -850,11 +835,12 @@ def main():
                             st.markdown("**Sample documents:**")
                             for i in range(min(3, len(df_preview))):
                                 sample_text = str(df_preview.iloc[i][text_columns[0]])[:150] + "..."
-                                st.markdown(f"*{sample_text}*")
+                                sample_id = str(df_preview.iloc[i].get(st.session_state.selected_id_column,
+                                                                       i)) if st.session_state.selected_id_column else i
+                                st.markdown(f"*{sample_id}: {sample_text}*")
                     else:
                         st.error("❌ No 'text' column found. Please ensure your CSV has a column named 'text'")
                         st.session_state.file_data = None
-
                 except Exception as e:
                     st.error(f"Error reading file: {str(e)}")
                     st.session_state.file_data = None
@@ -1068,11 +1054,9 @@ def main():
 
             with col1:
                 st.markdown("### Download Options")
-
                 # CSV download
                 df_export = pd.DataFrame(st.session_state.clustered_data)
                 csv_data = df_export.to_csv(index=False)
-
                 st.download_button(
                     label="📥 Download Results (CSV)",
                     data=csv_data,
@@ -1081,12 +1065,21 @@ def main():
                     type="primary",
                     use_container_width=True
                 )
-
                 # JSON download
-                json_data = json.dumps(st.session_state.clustered_data, indent=2)
+                json_data = []
+                for doc in st.session_state.clustered_data:
+                    # Ensure all values are JSON-serializable
+                    doc_copy = doc.copy()
+                    for k, v in doc_copy.items():
+                        if isinstance(v, (np.integer, np.floating)):
+                            doc_copy[k] = float(v) if isinstance(v, np.floating) else int(v)
+                        elif isinstance(v, (pd.Timestamp, pd.Timedelta)):
+                            doc_copy[k] = str(v)
+                    json_data.append(doc_copy)
+                json_str = json.dumps(json_data, indent=2)
                 st.download_button(
                     label="📄 Download as JSON",
-                    data=json_data,
+                    data=json_str,
                     file_name="text_clustering_results.json",
                     mime="application/json",
                     use_container_width=True

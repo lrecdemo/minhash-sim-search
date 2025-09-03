@@ -1,10 +1,3 @@
-try:
-    import GPUtil
-    GPU_AVAILABLE = True
-except ImportError:
-    GPUtil = None
-    GPU_AVAILABLE = False
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -26,7 +19,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 import psutil
-import GPUtil
 import platform
 from datetime import datetime
 
@@ -37,7 +29,6 @@ class PerformanceLogger:
         self.start_time = None
         self.peak_memory = 0
         self.peak_cpu = 0
-        self.peak_gpu = 0
 
     def start(self):
         self.start_time = time.time()
@@ -63,17 +54,6 @@ class PerformanceLogger:
         if current_cpu > self.peak_cpu:
             self.peak_cpu = current_cpu
 
-    def update_peak_gpu(self):
-        if not GPUtil:
-            return
-        try:
-            gpus = GPUtil.getGPUs()
-            if gpus:
-                current_gpu = max(gpu.load * 100 for gpu in gpus)
-                if current_gpu > self.peak_gpu:
-                    self.peak_gpu = current_gpu
-        except:
-            pass
 
     def get_summary(self, num_texts, num_clusters):
         total_time = time.time() - self.start_time
@@ -83,7 +63,6 @@ class PerformanceLogger:
             "num_texts_processed": f"{num_texts:,}",
             "num_clusters_formed": f"{num_clusters:,}",
             "peak_cpu_usage": f"{self.peak_cpu:.1f}%",
-            "peak_gpu_usage": f"{self.peak_gpu:.1f}%" if self.peak_gpu else "N/A",
             "system_info": f"{platform.system()} {platform.release()}, {psutil.cpu_count()} cores"
         }
 
@@ -788,7 +767,6 @@ def run_clustering_analysis(texts: List[str], threshold: float, progress_placeho
         status_text.text(f"Status: {stage}")
         logger.update_peak_memory()
         logger.update_peak_cpu()
-        logger.update_peak_gpu()
         if processed > 0:
             with metrics_container:
                 col1, col2, col3 = st.columns(3)
@@ -830,7 +808,7 @@ def run_clustering_analysis(texts: List[str], threshold: float, progress_placeho
 
 def main():
     # Handle URL parameters for cluster navigation
-    params = st.query_params()
+    params = st.query_params
     if "view_mode" in params and "selected_cluster" in params:
         if params["view_mode"][0] == "cluster":
             st.session_state.view_mode = "cluster"
@@ -1088,7 +1066,6 @@ def main():
                     st.metric("Texts Processed", summary["num_texts_processed"])
                     st.metric("Clusters Formed", summary["num_clusters_formed"])
                     st.metric("Peak CPU Usage", summary["peak_cpu_usage"])
-                    st.metric("Peak GPU Usage", summary["peak_gpu_usage"])
                     st.caption(f"System: {summary['system_info']}")
                 else:
                     st.info("Performance data will be available after processing.")

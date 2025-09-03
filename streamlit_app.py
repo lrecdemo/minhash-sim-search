@@ -18,6 +18,69 @@ from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
+import psutil
+import GPUtil
+import platform
+from datetime import datetime
+
+
+class PerformanceLogger:
+    def __init__(self):
+        self.logs = []
+        self.start_time = None
+        self.peak_memory = 0
+        self.peak_cpu = 0
+        self.peak_gpu = 0
+
+    def start(self):
+        self.start_time = time.time()
+        self.log("Process started")
+
+    def log(self, message, **kwargs):
+        entry = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "message": message,
+            **kwargs
+        }
+        self.logs.append(entry)
+
+    def update_peak_memory(self):
+        process = psutil.Process()
+        mem_info = process.memory_info()
+        current_mem = mem_info.rss / (1024 ** 2)  # MB
+        if current_mem > self.peak_memory:
+            self.peak_memory = current_mem
+
+    def update_peak_cpu(self):
+        current_cpu = psutil.cpu_percent(interval=0.1)
+        if current_cpu > self.peak_cpu:
+            self.peak_cpu = current_cpu
+
+    def update_peak_gpu(self):
+        try:
+            gpus = GPUtil.getGPUs()
+            if gpus:
+                current_gpu = max(gpu.load * 100 for gpu in gpus)
+                if current_gpu > self.peak_gpu:
+                    self.peak_gpu = current_gpu
+        except:
+            pass  # No GPU available
+
+    def get_summary(self, num_texts, num_clusters):
+        total_time = time.time() - self.start_time
+        return {
+            "total_processing_time": f"{total_time:.2f} seconds",
+            "peak_memory_usage": f"{self.peak_memory:.2f} MB",
+            "num_texts_processed": f"{num_texts:,}",
+            "num_clusters_formed": f"{num_clusters:,}",
+            "peak_cpu_usage": f"{self.peak_cpu:.1f}%",
+            "peak_gpu_usage": f"{self.peak_gpu:.1f}%" if self.peak_gpu else "N/A",
+            "system_info": f"{platform.system()} {platform.release()}, {psutil.cpu_count()} cores"
+        }
+
+    def store_summary(self, num_texts, num_clusters):
+        st.session_state.performance_summary = self.get_summary(num_texts, num_clusters)
+
 # Page config
 st.set_page_config(
     page_title="Text Similarity Clustering",
@@ -477,23 +540,23 @@ def display_document_clean(doc: Dict, search_terms: List[str] = None, show_clust
 
 
 def display_cluster_overview(df: pd.DataFrame):
-    """Display overview of all clusters."""
-    st.markdown("## 📚 Document Clusters Overview")
-    st.markdown("*Each cluster contains documents with similar content. Click on a cluster to explore all documents.*")
-    # Quick stats
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("📄 Documents", f"{len(df):,}")
-    with col2:
-        st.metric("🗂️ Clusters", df['cluster_id'].nunique())
-    with col3:
-        avg_confidence = df['certainty'].mean()
-        st.metric("🎯 Avg Confidence", f"{avg_confidence:.0%}")
-    with col4:
-        if 'batch_id' in df.columns:
-            batches = df['batch_id'].nunique()
-            st.metric("📦 Batches", batches)
-    st.markdown("---")
+    # """Display overview of all clusters."""
+    # st.markdown("## 📚 Document Clusters Overview")
+    # st.markdown("*Each cluster contains documents with similar content. Click on a cluster to explore all documents.*")
+    # # Quick stats
+    # col1, col2, col3, col4 = st.columns(4)
+    # with col1:
+    #     st.metric("📄 Documents", f"{len(df):,}")
+    # with col2:
+    #     st.metric("🗂️ Clusters", df['cluster_id'].nunique())
+    # with col3:
+    #     avg_confidence = df['certainty'].mean()
+    #     st.metric("🎯 Avg Confidence", f"{avg_confidence:.0%}")
+    # with col4:
+    #     if 'batch_id' in df.columns:
+    #         batches = df['batch_id'].nunique()
+    #         st.metric("📦 Batches", batches)
+    # st.markdown("---")
     # Group by cluster
     cluster_stats = (
         df.groupby('cluster_id')
@@ -702,11 +765,11 @@ def display_global_search(df: pd.DataFrame):
         else:
             st.warning(f"No documents found matching '{global_search}' with {min_confidence:.0%}+ confidence")
 
-
 def run_clustering_analysis(texts: List[str], threshold: float, progress_placeholder):
-    """Run the clustering analysis with progress updates."""
+    logger = PerformanceLogger()
+    logger.start()
+    logger.log("Initializing clustering service")
     clustering_service = OptimizedMinHashLSHClustering(threshold=threshold)
-
     progress_bar = progress_placeholder.progress(0)
     status_text = progress_placeholder.empty()
     metrics_container = progress_placeholder.container()
@@ -714,7 +777,9 @@ def run_clustering_analysis(texts: List[str], threshold: float, progress_placeho
     def progress_callback(stage, progress, processed, clusters):
         progress_bar.progress(progress)
         status_text.text(f"Status: {stage}")
-
+        logger.update_peak_memory()
+        logger.update_peak_cpu()
+        logger.update_peak_gpu()
         if processed > 0:
             with metrics_container:
                 col1, col2, col3 = st.columns(3)
@@ -727,12 +792,12 @@ def run_clustering_analysis(texts: List[str], threshold: float, progress_placeho
                     st.metric("Rate", f"{rate:.1f} docs/sec")
 
     st.session_state.start_time = time.time()
-
     try:
+        logger.log(f"Processing {len(texts):,} documents with threshold {threshold}")
         clustered_docs = clustering_service.cluster_documents_optimized(texts, progress_callback)
+        logger.log(f"Clustering completed for {len(clustered_docs)} documents")
 
         # Convert to dict format
-        # In run_clustering_analysis, update the result conversion:
         result = []
         for i, doc in enumerate(clustered_docs):
             doc_id = st.session_state.get('file_data').iloc[doc.original_index].get(st.session_state.selected_id_column,
@@ -746,12 +811,12 @@ def run_clustering_analysis(texts: List[str], threshold: float, progress_placeho
                 "original_index": doc.original_index,
                 "batch_id": doc.batch_id
             })
-
-        return result
-
+        logger.log(f"Conversion to result format completed")
+        return result, logger
     except Exception as e:
         st.error(f"Clustering failed: {str(e)}")
-        return None
+        return None, logger
+
 
 
 def main():
@@ -905,33 +970,24 @@ def main():
             progress_container = st.container()
 
             # Run clustering in a separate thread to avoid blocking
+            # In the processing section of main():
+            # In the processing section of main():
             if 'clustering_started' not in st.session_state:
                 st.session_state.clustering_started = True
-
-                # Run clustering
                 threshold = st.session_state.get('similarity_threshold', 0.3)
-
                 with st.spinner("Initializing clustering analysis..."):
-                    results = run_clustering_analysis(texts, threshold, progress_container)
-
+                    results, logger = run_clustering_analysis(texts, threshold, progress_container)
                 if results:
                     st.session_state.clustered_data = results
                     st.session_state.view_mode = 'overview'
                     st.session_state.processing = False
-                    # Clean up
-                    if 'file_data' in st.session_state:
-                        del st.session_state.file_data
-                    if 'clustering_started' in st.session_state:
-                        del st.session_state.clustering_started
                     st.success("✅ Analysis complete!")
                     st.balloons()
+                    # Store performance summary for later display
+                    df_results = pd.DataFrame(results)
+                    logger.store_summary(len(texts), df_results['cluster_id'].nunique())
                     time.sleep(1)
                     st.rerun()
-                else:
-                    st.session_state.processing = False
-                    if 'clustering_started' in st.session_state:
-                        del st.session_state.clustering_started
-                    st.error("❌ Analysis failed. Please try again.")
 
             # Show cancel option
             st.markdown("---")
@@ -968,26 +1024,22 @@ def main():
 
         with tab3:
             st.markdown("## 📊 Analysis Statistics")
-
             col1, col2 = st.columns(2)
 
             with col1:
                 total_docs = len(df_results)
                 num_clusters = df_results['cluster_id'].nunique()
                 avg_confidence = df_results['certainty'].mean()
-
                 st.markdown("### Overview")
                 st.write(f"**Documents analyzed:** {total_docs:,}")
                 st.write(f"**Clusters formed:** {num_clusters}")
                 st.write(f"**Average confidence:** {avg_confidence:.1%}")
-
                 if 'batch_id' in df_results.columns:
                     num_batches = df_results['batch_id'].nunique()
                     st.write(f"**Batches processed:** {num_batches}")
 
                 # Top clusters
                 cluster_sizes = df_results['cluster_id'].value_counts().sort_values(ascending=False)
-
                 st.markdown("### Top 5 Largest Clusters")
                 for cluster_id, size in cluster_sizes.head(5).items():
                     cluster_confidence = df_results[df_results['cluster_id'] == cluster_id]['certainty'].mean()
@@ -1005,7 +1057,6 @@ def main():
                                 'Documents': size,
                                 'Avg Confidence': f"{avg_conf:.1%}"
                             })
-
                         cluster_df = pd.DataFrame(cluster_data)
                         st.dataframe(cluster_df, hide_index=True, use_container_width=True)
 
@@ -1014,12 +1065,25 @@ def main():
                 high_conf = len(df_results[df_results['certainty'] >= 0.8])
                 med_conf = len(df_results[(df_results['certainty'] >= 0.6) & (df_results['certainty'] < 0.8)])
                 low_conf = len(df_results[df_results['certainty'] < 0.6])
-
                 st.write(f"🟢 **High confidence (≥80%):** {high_conf} documents ({high_conf / total_docs:.1%})")
                 st.write(f"🟡 **Medium confidence (60-79%):** {med_conf} documents ({med_conf / total_docs:.1%})")
                 st.write(f"🔴 **Low confidence (<60%):** {low_conf} documents ({low_conf / total_docs:.1%})")
 
             with col2:
+                # Performance summary
+                st.markdown("### 🚀 Performance Summary")
+                if 'performance_summary' in st.session_state:
+                    summary = st.session_state.performance_summary
+                    st.metric("Total Processing Time", summary["total_processing_time"])
+                    st.metric("Peak Memory Usage", summary["peak_memory_usage"])
+                    st.metric("Texts Processed", summary["num_texts_processed"])
+                    st.metric("Clusters Formed", summary["num_clusters_formed"])
+                    st.metric("Peak CPU Usage", summary["peak_cpu_usage"])
+                    st.metric("Peak GPU Usage", summary["peak_gpu_usage"])
+                    st.caption(f"System: {summary['system_info']}")
+                else:
+                    st.info("Performance data will be available after processing.")
+
                 # Charts
                 fig = go.Figure(data=[
                     go.Histogram(x=df_results['certainty'], nbinsx=20, marker_color='lightblue')
@@ -1108,7 +1172,6 @@ def main():
 
         # Bottom stats bar
         with st.container():
-            st.markdown("---")
             cols = st.columns(4)
 
             total_docs = len(df_results)

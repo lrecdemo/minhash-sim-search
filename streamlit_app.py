@@ -821,7 +821,7 @@ def run_clustering_analysis(texts: List[str], threshold: float, progress_placeho
 
 def main():
     # Handle URL parameters for cluster navigation
-    params = st.experimental_get_query_params()
+    params = st.query_params()
     if "view_mode" in params and "selected_cluster" in params:
         if params["view_mode"][0] == "cluster":
             st.session_state.view_mode = "cluster"

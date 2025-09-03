@@ -797,9 +797,8 @@ def main():
     with st.sidebar:
         if st.button("🔄 Clear Cache & Reset"):
             st.cache_data.clear()
-            st.session_state.clustered_data = None
-            st.session_state.view_mode = 'overview'
-            st.session_state.processing = False
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
             st.rerun()
 
         if st.session_state.clustered_data is not None:
@@ -824,12 +823,20 @@ def main():
             uploaded_file = st.file_uploader(
                 "Choose a CSV file with your texts",
                 type=['csv'],
-                help="Your CSV must have a column named 'text' containing the documents to analyze"
+                help="Your CSV must have a column named 'text' containing the documents to analyze",
+                key="file_uploader"
             )
 
             if uploaded_file is not None:
                 try:
-                    df_preview = pd.read_csv(uploaded_file)
+                    # Store file data in session state immediately
+                    if 'file_data' not in st.session_state or st.session_state.get('file_name') != uploaded_file.name:
+                        df_preview = pd.read_csv(uploaded_file)
+                        st.session_state.file_data = df_preview
+                        st.session_state.file_name = uploaded_file.name
+                        uploaded_file.seek(0)  # Reset file pointer
+                    else:
+                        df_preview = st.session_state.file_data
 
                     text_columns = [col for col in df_preview.columns if col.lower().strip() == 'text']
                     if text_columns:
@@ -837,7 +844,7 @@ def main():
 
                         if len(df_preview) > 50000:
                             st.error("❌ Maximum 50,000 documents supported for Streamlit deployment")
-                            uploaded_file = None
+                            st.session_state.file_data = None
                         else:
                             # Show sample
                             st.markdown("**Sample documents:**")
@@ -846,12 +853,11 @@ def main():
                                 st.markdown(f"*{sample_text}*")
                     else:
                         st.error("❌ No 'text' column found. Please ensure your CSV has a column named 'text'")
-                        uploaded_file = None
+                        st.session_state.file_data = None
 
-                    uploaded_file.seek(0)
                 except Exception as e:
                     st.error(f"Error reading file: {str(e)}")
-                    uploaded_file = None
+                    st.session_state.file_data = None
 
         with col2:
             st.markdown("**Clustering Settings**")
@@ -864,16 +870,19 @@ def main():
                     0.1: "Very Loose", 0.2: "Loose", 0.3: "Moderate",
                     0.4: "Moderate+", 0.5: "Balanced", 0.6: "Strict",
                     0.7: "Very Strict", 0.8: "Extremely Strict", 0.9: "Nearly Identical"
-                }[x]
+                }[x],
+                key="similarity_slider"
             )
 
             st.caption("Higher = stricter similarity requirements")
 
-            if uploaded_file is not None:
-                estimated_time = max(5, len(df_preview) // 100)
+            # Store similarity level in session state
+            st.session_state.similarity_threshold = similarity_level
+
+            if st.session_state.get('file_data') is not None:
+                estimated_time = max(5, len(st.session_state.file_data) // 100)
                 st.caption(f"Estimated processing time: ~{estimated_time} seconds")
 
-            if uploaded_file is not None and 'df_preview' in locals() and df_preview is not None:
                 if st.button("🚀 Start Analysis", type="primary", use_container_width=True):
                     st.session_state.processing = True
                     st.rerun()
@@ -889,41 +898,71 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-        # Read the uploaded file data
-        uploaded_file = st.session_state.get('uploaded_file')
-        if uploaded_file is None:
-            # Try to get from file uploader again
+        # Check if we have file data
+        if 'file_data' not in st.session_state or st.session_state.file_data is None:
             st.error("File data lost. Please re-upload your file.")
             st.session_state.processing = False
-            st.rerun()
+            if st.button("🔄 Go Back"):
+                st.rerun()
+            return
 
         try:
-            # Read file content
-            df = pd.read_csv(uploaded_file)
+            # Get data from session state
+            df = st.session_state.file_data
             text_columns = [col for col in df.columns if col.lower().strip() == 'text']
             texts = df[text_columns[0]].dropna().astype(str).tolist()
 
-            # Create progress placeholder
-            progress_placeholder = st.empty()
+            st.info(
+                f"Processing {len(texts):,} documents with {st.session_state.similarity_threshold} similarity threshold...")
 
-            # Run clustering
-            threshold = st.session_state.get('similarity_threshold', 0.3)
-            results = run_clustering_analysis(texts, threshold, progress_placeholder)
+            # Create a single container for all progress updates
+            progress_container = st.container()
 
-            if results:
-                st.session_state.clustered_data = results
-                st.session_state.view_mode = 'overview'
+            # Run clustering in a separate thread to avoid blocking
+            if 'clustering_started' not in st.session_state:
+                st.session_state.clustering_started = True
+
+                # Run clustering
+                threshold = st.session_state.get('similarity_threshold', 0.3)
+
+                with st.spinner("Initializing clustering analysis..."):
+                    results = run_clustering_analysis(texts, threshold, progress_container)
+
+                if results:
+                    st.session_state.clustered_data = results
+                    st.session_state.view_mode = 'overview'
+                    st.session_state.processing = False
+                    # Clean up
+                    if 'file_data' in st.session_state:
+                        del st.session_state.file_data
+                    if 'clustering_started' in st.session_state:
+                        del st.session_state.clustering_started
+                    st.success("✅ Analysis complete!")
+                    st.balloons()
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.session_state.processing = False
+                    if 'clustering_started' in st.session_state:
+                        del st.session_state.clustering_started
+                    st.error("❌ Analysis failed. Please try again.")
+
+            # Show cancel option
+            st.markdown("---")
+            if st.button("❌ Cancel Processing", type="secondary"):
                 st.session_state.processing = False
-                st.success("✅ Analysis complete! View your results below.")
-                time.sleep(2)
+                if 'clustering_started' in st.session_state:
+                    del st.session_state.clustering_started
                 st.rerun()
-            else:
-                st.session_state.processing = False
-                st.error("❌ Analysis failed. Please try again.")
 
         except Exception as e:
             st.session_state.processing = False
+            if 'clustering_started' in st.session_state:
+                del st.session_state.clustering_started
             st.error(f"Processing error: {str(e)}")
+            st.error("Please check your CSV format and try again.")
+            if st.button("🔄 Try Again"):
+                st.rerun()
 
     else:
         # Results section

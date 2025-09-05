@@ -7,3 +7,4 @@ gputil==1.4.0
 psutil==7.0.0
 networkx==3.2.1
 pyvis===0.3.2
+sklearn===1.7.1

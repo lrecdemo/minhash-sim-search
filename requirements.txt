@@ -1,31 +1,11 @@
-# Core data processing
-pandas>=2.1.0,<2.2.0
-numpy>=1.24.0,<1.26.0
-
-# Web framework
-streamlit>=1.28.0,<1.30.0
-
-# Visualization
-plotly>=5.17.0,<5.18.0
-matplotlib>=3.7.0,<3.8.0
-seaborn>=0.12.0,<0.14.0
-
-# Network analysis and graph visualization
-networkx>=3.1,<3.3
-pyvis>=0.3.2,<0.4.0
-
-# Machine learning and similarity
-scikit-learn>=1.3.0,<1.4.0
-datasketch>=1.6.0,<1.7.0
-
-# System monitoring
-psutil>=5.9.0,<5.10.0
-
-# Concurrency
-futures>=3.1.1; python_version<"3.2"
-
-# Text processing (built-in modules, but ensuring compatibility)
-unicodedata2>=15.0.0; python_version<"3.11"
-
-# Optional: For better performance
-numba>=0.57.0,<0.59.0
+streamlit>=1.28.0
+pandas>=2.0.0
+numpy>=1.24.0
+plotly>=5.15.0
+matplotlib>=3.6.0
+seaborn>=0.11.0
+networkx>=3.0
+pyvis>=0.3.0
+scikit-learn>=1.2.0
+datasketch>=1.6.0
+psutil>=5.8.0

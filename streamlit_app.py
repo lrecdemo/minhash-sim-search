@@ -1,7 +1,12 @@
+import unicodedata
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import networkx as nx
+from pyvis.network import Network
+import streamlit.components.v1 as components
+
 import numpy as np
 from typing import List, Dict, Set, Tuple, Optional
 import io
@@ -21,6 +26,39 @@ import threading
 import psutil
 import platform
 from datetime import datetime
+
+
+def display_cluster_graph(df: pd.DataFrame, cluster_id: int, threshold: float = 0.3):
+    cluster_docs = df[df['cluster_id'] == cluster_id].copy()
+    if len(cluster_docs) < 2:
+        st.info("Not enough documents to visualize a graph.")
+        return
+
+    # Build graph
+    G = nx.Graph()
+    for _, doc in cluster_docs.iterrows():
+        G.add_node(doc['original_index'], label=str(doc['original_index']), title=doc['text'][:200])
+
+    # Add edges based on similarity
+    for i, doc1 in cluster_docs.iterrows():
+        for j, doc2 in cluster_docs.iterrows():
+            if doc1['original_index'] >= doc2['original_index']:
+                continue
+            # Use certainty or other similarity metric if available
+            # For demonstration, connect all docs in the cluster
+            G.add_edge(doc1['original_index'], doc2['original_index'])
+
+    # Create PyVis network
+    net = Network(height="500px", width="100%", notebook=False, bgcolor="#f8f9fa", font_color="black")
+    net.from_nx(G)
+    net.show_buttons(filter_=['physics'])
+
+    # Render in Streamlit
+    tmp_html = f"/tmp/cluster_{cluster_id}_graph.html"
+    net.save_graph(tmp_html)
+    with open(tmp_html, 'r', encoding='utf-8') as f:
+        html_content = f.read()
+    components.html(html_content, height=520)
 
 
 class PerformanceLogger:
@@ -54,7 +92,6 @@ class PerformanceLogger:
         if current_cpu > self.peak_cpu:
             self.peak_cpu = current_cpu
 
-
     def get_summary(self, num_texts, num_clusters):
         total_time = time.time() - self.start_time
         return {
@@ -68,6 +105,7 @@ class PerformanceLogger:
 
     def store_summary(self, num_texts, num_clusters):
         st.session_state.performance_summary = self.get_summary(num_texts, num_clusters)
+
 
 # Page config
 st.set_page_config(
@@ -148,16 +186,39 @@ class ClusteredDocument:
 class OptimizedMinHashLSHClustering:
     """Optimized clustering implementation for Streamlit deployment."""
 
-    def __init__(self, num_perm: int = NUM_PERM, threshold: float = 0.3):
+    def __init__(self, num_perm: int = NUM_PERM, threshold: float = 0.3, shingle_size: int = 5):
         self.num_perm = num_perm
         self.threshold = threshold
         self.batch_size = BATCH_SIZE
         self.max_workers = MAX_WORKERS
+        self.shingle_size = shingle_size  # Add this parameter
+
+    # Keep all existing methods the same, but update these two:
+
+    @lru_cache(maxsize=10000)
+    def generate_character_shingles_cached(self, text_hash: int, text: str, k: int) -> frozenset:
+        """Generate character n-grams (true shingles)."""
+        if len(text) < k:
+            return frozenset([text]) if text else frozenset()
+
+        shingles = set()
+        for i in range(len(text) - k + 1):
+            shingle = text[i:i + k]  # Character-based
+            shingles.add(hash(shingle))
+        return frozenset(shingles)
+
+    def generate_shingles_fast(self, text: str) -> Set[int]:
+        """Fast character shingle generation with caching."""
+        text_hash = hash(text)
+        cached_result = self.generate_character_shingles_cached(text_hash, text, self.shingle_size)
+        return set(cached_result)
+
 
     def preprocess_text_vectorized(self, texts: List[str]) -> List[str]:
         """Vectorized text preprocessing using pandas."""
         if len(texts) == 1:
             text = texts[0].lower()
+            text = unicodedata.normalize('NFC', str(text))
             text = CLEAN_PATTERN.sub(' ', text)
             text = WHITESPACE_PATTERN.sub(' ', text)
             return [text.strip()]
@@ -170,31 +231,13 @@ class OptimizedMinHashLSHClustering:
 
         return df['text'].tolist()
 
-    @lru_cache(maxsize=10000)
-    def generate_shingles_cached(self, text_hash: int, text: str, k: int = 3) -> frozenset:
-        """Cached shingle generation."""
-        words = text.split()
-        if len(words) < k:
-            return frozenset(words) if words else frozenset()
-
-        shingles = set()
-        for i in range(len(words) - k + 1):
-            shingle = ' '.join(words[i:i + k])
-            shingles.add(hash(shingle))
-        return frozenset(shingles)
-
-    def generate_shingles_fast(self, text: str, k: int = 3) -> Set[int]:
-        """Fast shingle generation with caching."""
-        text_hash = hash(text)
-        cached_result = self.generate_shingles_cached(text_hash, text, k)
-        return set(cached_result)
-
     def create_minhash_optimized(self, shingles: Set[int]) -> MinHash:
         """Optimized MinHash creation."""
         minhash = MinHash(num_perm=self.num_perm)
         for shingle in shingles:
             minhash.update(str(shingle).encode('utf-8'))
         return minhash
+
 
     def process_batch_optimized(self, batch_texts: List[str], batch_start_idx: int,
                                 progress_callback=None) -> Tuple[
@@ -526,6 +569,7 @@ def display_document_clean(doc: Dict, search_terms: List[str] = None, show_clust
     </div>
     """, unsafe_allow_html=True)
 
+
 def display_cluster_overview(df: pd.DataFrame):
     # Compute cluster stats
     cluster_stats = (
@@ -590,7 +634,7 @@ def display_cluster_overview(df: pd.DataFrame):
         (cluster_stats['size'] <= selected_max_size) &
         (cluster_stats['avg_confidence'] >= selected_min_conf) &
         (cluster_stats['avg_confidence'] <= selected_max_conf)
-    ]
+        ]
 
     total_clusters = len(filtered_clusters)
     if total_clusters == 0:
@@ -601,9 +645,10 @@ def display_cluster_overview(df: pd.DataFrame):
     clusters_per_page = 10
     total_pages = (total_clusters - 1) // clusters_per_page + 1
     current_page = st.selectbox(
-        "Choose cluster page:",
+        "",
         options=range(1, total_pages + 1),
-        format_func=lambda x: f"Page {x} (Clusters {(x - 1) * clusters_per_page + 1}-{min(x * clusters_per_page, total_clusters)})"
+        format_func=lambda
+            x: f"Page {x} (Clusters {(x - 1) * clusters_per_page + 1}-{min(x * clusters_per_page, total_clusters)})"
     )
     start_idx = (current_page - 1) * clusters_per_page
     end_idx = min(start_idx + clusters_per_page, total_clusters)
@@ -619,7 +664,7 @@ def display_cluster_overview(df: pd.DataFrame):
         with col1:
             st.markdown(f"""
             <div class="cluster-header">
-                <h3 style="margin: 0; color: white;">🗂️ Cluster {cluster_id}</h3>
+                <h3 style="margin: 0; color: white;">Cluster {cluster_id}</h3>
                 <p style="margin: 0.5rem 0 0 0; opacity: 0.9; color: white;">
                     {cluster_size} documents • {avg_confidence:.0%} avg confidence{batch_info}
                 </p>
@@ -636,7 +681,7 @@ def display_cluster_overview(df: pd.DataFrame):
                 </div>
                 """, unsafe_allow_html=True)
 
-            if st.button(f"📖 View All {cluster_size} Documents", key=f"view_cluster_{cluster_id}"):
+            if st.button(f"View All {cluster_size} Documents", key=f"view_cluster_{cluster_id}"):
                 st.session_state.view_mode = 'cluster'
                 st.session_state.selected_cluster = cluster_id
                 st.rerun()
@@ -644,13 +689,169 @@ def display_cluster_overview(df: pd.DataFrame):
             st.markdown("---")
 
 
+import streamlit as st
+import pandas as pd
+import networkx as nx
+import plotly.graph_objects as go
+import plotly.express as px
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+from typing import List, Dict, Any
+
+
+def create_document_graph(docs_df: pd.DataFrame, similarity_threshold: float = 0.3) -> Dict[str, Any]:
+    """Create a network graph of documents based on text similarity."""
+
+    # Calculate TF-IDF similarity between documents
+    vectorizer = TfidfVectorizer(max_features=1000, stop_words='english', ngram_range=(1, 2))
+
+    try:
+        tfidf_matrix = vectorizer.fit_transform(docs_df['text'])
+        similarity_matrix = cosine_similarity(tfidf_matrix)
+    except:
+        # Fallback for very small datasets
+        similarity_matrix = np.ones((len(docs_df), len(docs_df)))
+
+    # Create NetworkX graph
+    G = nx.Graph()
+
+    # Add nodes (documents)
+    for idx, doc in docs_df.iterrows():
+        doc_id = doc.get('id', doc['original_index'])
+        G.add_node(doc_id,
+                   text=doc['text'][:100] + "..." if len(doc['text']) > 100 else doc['text'],
+                   full_text=doc['text'],
+                   confidence=doc['certainty'],
+                   original_index=doc['original_index'],
+                   batch_id=doc.get('batch_id', 'Unknown'))
+
+    # Add edges based on similarity
+    doc_indices = docs_df.index.tolist()
+    for i, idx1 in enumerate(doc_indices):
+        for j, idx2 in enumerate(doc_indices):
+            if i < j and similarity_matrix[i][j] > similarity_threshold:
+                doc_id1 = docs_df.loc[idx1].get('id', docs_df.loc[idx1]['original_index'])
+                doc_id2 = docs_df.loc[idx2].get('id', docs_df.loc[idx2]['original_index'])
+                G.add_edge(doc_id1, doc_id2, weight=similarity_matrix[i][j])
+
+    return G
+
+
+def create_plotly_network(G: nx.Graph, layout_type: str = "spring") -> go.Figure:
+    """Create a Plotly network visualization similar to Neo4j Bloom."""
+
+    # Calculate layout positions
+    if layout_type == "spring":
+        pos = nx.spring_layout(G, k=3, iterations=50)
+    elif layout_type == "circular":
+        pos = nx.circular_layout(G)
+    elif layout_type == "kamada_kawai":
+        pos = nx.kamada_kawai_layout(G) if len(G.nodes()) > 1 else nx.spring_layout(G)
+    else:
+        pos = nx.spring_layout(G)
+
+    # Extract node and edge information
+    node_x, node_y = [], []
+    node_text, node_info, node_colors, node_sizes = [], [], [], []
+
+    for node in G.nodes():
+        x, y = pos[node]
+        node_x.append(x)
+        node_y.append(y)
+
+        # Node information
+        node_data = G.nodes[node]
+        confidence = node_data.get('confidence', 0)
+        text_preview = node_data.get('text', 'No text')
+        batch_id = node_data.get('batch_id', 'Unknown')
+
+        node_text.append(f"Doc #{node}")
+        node_info.append(f"Document #{node}<br>"
+                         f"Confidence: {confidence:.1%}<br>"
+                         f"Batch: {batch_id}<br>"
+                         f"Preview: {text_preview}")
+
+        # Color by confidence level
+        if confidence >= 0.8:
+            node_colors.append('rgba(46, 125, 50, 0.8)')  # Green
+        elif confidence >= 0.6:
+            node_colors.append('rgba(255, 193, 7, 0.8)')  # Yellow
+        else:
+            node_colors.append('rgba(244, 67, 54, 0.8)')  # Red
+
+        # Size by number of connections
+        node_sizes.append(10 + len(list(G.neighbors(node))) * 5)
+
+    # Create edge traces
+    edge_x, edge_y = [], []
+    edge_info = []
+
+    for edge in G.edges():
+        x0, y0 = pos[edge[0]]
+        x1, y1 = pos[edge[1]]
+        edge_x.extend([x0, x1, None])
+        edge_y.extend([y0, y1, None])
+
+        weight = G.edges[edge].get('weight', 0)
+        edge_info.append(f"Similarity: {weight:.2f}")
+
+    # Create the figure
+    fig = go.Figure()
+
+    # Add edges
+    fig.add_trace(go.Scatter(x=edge_x, y=edge_y,
+                             line=dict(width=1, color='rgba(128, 128, 128, 0.5)'),
+                             hoverinfo='none',
+                             mode='lines',
+                             showlegend=False))
+
+    # Add nodes
+    fig.add_trace(go.Scatter(x=node_x, y=node_y,
+                             mode='markers+text',
+                             marker=dict(size=node_sizes,
+                                         color=node_colors,
+                                         line=dict(width=2, color='white')),
+                             text=node_text,
+                             textposition="middle center",
+                             textfont=dict(size=10, color='white'),
+                             hovertemplate='%{customdata}<extra></extra>',
+                             customdata=node_info,
+                             showlegend=False))
+
+    # Update layout for Neo4j Bloom-like appearance
+    fig.update_layout(
+        title="",
+        title_x=0.5,
+        showlegend=False,
+        hovermode='closest',
+        margin=dict(b=20, l=5, r=5, t=40),
+        annotations=[dict(
+            text="Node size = number of connections | Color = confidence level",
+            showarrow=False,
+            xref="paper", yref="paper",
+            x=0.005, y=-0.002,
+            xanchor='left', yanchor='bottom',
+            font=dict(color='gray', size=12)
+        )],
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        plot_bgcolor='rgba(20, 20, 30, 0.9)',
+        paper_bgcolor='rgba(20, 20, 30, 0.9)',
+        font=dict(color='white')
+    )
+
+    return fig
+
 
 def display_cluster_details(df: pd.DataFrame, cluster_id: int):
-    """Display all documents in a specific cluster."""
+    """Display all documents in a specific cluster with graph visualization."""
     cluster_docs = df[df['cluster_id'] == cluster_id].copy()
+
+    # Header section
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.markdown(f"# 📚 Cluster {cluster_id} - All Documents")
+        st.markdown(f"# Cluster {cluster_id} - All Documents")
         batch_info = ""
         if 'batch_id' in cluster_docs.columns:
             batches = cluster_docs['batch_id'].nunique()
@@ -661,81 +862,172 @@ def display_cluster_details(df: pd.DataFrame, cluster_id: int):
         if st.button("← Back to Overview", type="secondary"):
             st.session_state.view_mode = 'overview'
             st.rerun()
-    if len(cluster_docs) > 100:
-        st.warning(
-            f"⚡ Large cluster detected ({len(cluster_docs)} documents). Consider using search to find specific documents.")
-    # Search and sort controls
-    search_col1, search_col2 = st.columns([3, 1])
-    with search_col1:
-        search_query = st.text_input(
-            "🔍 Search within this cluster:",
-            placeholder="Enter words or phrases to find specific documents...",
-            key=f"search_cluster_{cluster_id}"
-        )
-    with search_col2:
-        sort_option = st.selectbox(
-            "Sort by:",
-            options=["confidence", "original", "length"],
-            format_func=lambda x: {"confidence": "Confidence", "original": "Original Order", "length": "Text Length"}[
-                x],
-            key=f"sort_cluster_{cluster_id}"
-        )
-    # Filter and sort documents
-    filtered_docs = cluster_docs.copy()
-    search_terms = []
-    if search_query.strip():
-        search_terms = [term.strip() for term in search_query.split() if term.strip()]
-        mask = cluster_docs['text'].str.contains(search_query.strip(), case=False, na=False)
-        search_filtered = cluster_docs[mask]
-        if len(search_filtered) == 0:
-            st.warning(f"No documents found containing '{search_query}' in this cluster.")
-        else:
-            st.success(f"Found {len(search_filtered)} documents matching '{search_query}'")
-            filtered_docs = search_filtered
-    # Sort documents
-    if sort_option == "confidence":
-        filtered_docs = filtered_docs.sort_values('certainty', ascending=False)
-    elif sort_option == "original":
-        filtered_docs = filtered_docs.sort_values('original_index')
-    elif sort_option == "length":
-        filtered_docs['text_length'] = filtered_docs['text'].str.len()
-        filtered_docs = filtered_docs.sort_values('text_length', ascending=False)
-    # Pagination for large clusters
-    docs_per_page = 50 if len(filtered_docs) > 100 else len(filtered_docs)
-    if len(filtered_docs) > 50:
-        total_pages = (len(filtered_docs) - 1) // docs_per_page + 1
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            current_page = st.selectbox(
-                f"Page (showing {docs_per_page} documents per page):",
-                options=range(1, total_pages + 1),
-                format_func=lambda
-                    x: f"Page {x} (Documents {(x - 1) * docs_per_page + 1}-{min(x * docs_per_page, len(filtered_docs))})",
-                key=f"page_selector_{cluster_id}"
+
+    # View mode selection
+    view_mode = st.radio(
+        "",
+        ["List View", "Graph View"],
+        horizontal=True,
+        key=f"view_mode_cluster_{cluster_id}"
+    )
+
+    if view_mode == "Graph View":
+        # Graph visualization section
+        # st.markdown("### Document Relationship Network")
+
+        # Graph controls
+        graph_col1, graph_col2, graph_col3 = st.columns([2, 2, 2])
+
+        with graph_col1:
+            similarity_threshold = st.slider(
+                "Similarity Threshold",
+                min_value=0.1,
+                max_value=0.8,
+                value=0.3,
+                step=0.05,
+                help="Higher values show fewer, stronger connections",
+                key=f"similarity_threshold_{cluster_id}"
             )
-        start_idx = (current_page - 1) * docs_per_page
-        end_idx = min(start_idx + docs_per_page, len(filtered_docs))
-        page_docs = filtered_docs.iloc[start_idx:end_idx]
+
+        with graph_col2:
+            layout_type = st.selectbox(
+                "Layout Algorithm",
+                ["spring", "circular", "kamada_kawai"],
+                format_func=lambda x: {
+                    "spring": "Force-directed",
+                    "circular": "Circular",
+                    "kamada_kawai": "Kamada-Kawai"
+                }[x],
+                key=f"layout_type_{cluster_id}"
+            )
+
+        with graph_col3:
+            if st.button("🔄 Regenerate Graph", key=f"regen_graph_{cluster_id}"):
+                st.rerun()
+
+        # Create and display graph
+        if len(cluster_docs) > 1:
+            try:
+                with st.spinner("Creating network graph..."):
+                    G = create_document_graph(cluster_docs, similarity_threshold)
+                    fig = create_plotly_network(G, layout_type)
+                    st.plotly_chart(fig, use_container_width=True, height=600)
+
+                # Graph statistics
+                st.markdown("#### 📈 Network Statistics")
+                stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
+
+                with stats_col1:
+                    st.metric("Nodes", len(G.nodes()))
+                with stats_col2:
+                    st.metric("Edges", len(G.edges()))
+                with stats_col3:
+                    avg_degree = sum(dict(G.degree()).values()) / len(G.nodes()) if len(G.nodes()) > 0 else 0
+                    st.metric("Avg Connections", f"{avg_degree:.1f}")
+                with stats_col4:
+                    density = nx.density(G) if len(G.nodes()) > 1 else 0
+                    st.metric("Network Density", f"{density:.2f}")
+
+            except Exception as e:
+                st.error(f"Error creating graph visualization: {str(e)}")
+                st.info("Falling back to list view...")
+                view_mode = "List View"
+        else:
+            st.info("Graph view requires at least 2 documents. Showing list view instead.")
+            view_mode = "List View"
+
+    if view_mode == "List View":
+        # Original list view functionality
+        if len(cluster_docs) > 100:
+            st.warning(
+                f"⚡ Large cluster detected ({len(cluster_docs)} documents). Consider using search to find specific documents.")
+
+        # Search and sort controls
+        search_col1, search_col2 = st.columns([3, 1])
+        with search_col1:
+            search_query = st.text_input(
+                "🔍 Search within this cluster:",
+                placeholder="Enter words or phrases to find specific documents...",
+                key=f"search_cluster_{cluster_id}"
+            )
+        with search_col2:
+            sort_option = st.selectbox(
+                "Sort by:",
+                options=["confidence", "original", "length"],
+                format_func=lambda x:
+                {"confidence": "Confidence", "original": "Original Order", "length": "Text Length"}[x],
+                key=f"sort_cluster_{cluster_id}"
+            )
+
+        # Filter and sort documents
+        filtered_docs = cluster_docs.copy()
+        search_terms = []
+        if search_query.strip():
+            search_terms = [term.strip() for term in search_query.split() if term.strip()]
+            mask = cluster_docs['text'].str.contains(search_query.strip(), case=False, na=False)
+            search_filtered = cluster_docs[mask]
+            if len(search_filtered) == 0:
+                st.warning(f"No documents found containing '{search_query}' in this cluster.")
+            else:
+                st.success(f"Found {len(search_filtered)} documents matching '{search_query}'")
+                filtered_docs = search_filtered
+
+        # Sort documents
+        if sort_option == "confidence":
+            filtered_docs = filtered_docs.sort_values('certainty', ascending=False)
+        elif sort_option == "original":
+            filtered_docs = filtered_docs.sort_values('original_index')
+        elif sort_option == "length":
+            filtered_docs['text_length'] = filtered_docs['text'].str.len()
+            filtered_docs = filtered_docs.sort_values('text_length', ascending=False)
+
+        # Pagination for large clusters
+        docs_per_page = 50 if len(filtered_docs) > 100 else len(filtered_docs)
+        if len(filtered_docs) > 50:
+            total_pages = (len(filtered_docs) - 1) // docs_per_page + 1
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                current_page = st.selectbox(
+                    f"Page (showing {docs_per_page} documents per page):",
+                    options=range(1, total_pages + 1),
+                    format_func=lambda
+                        x: f"Page {x} (Documents {(x - 1) * docs_per_page + 1}-{min(x * docs_per_page, len(filtered_docs))})",
+                    key=f"page_selector_{cluster_id}"
+                )
+            start_idx = (current_page - 1) * docs_per_page
+            end_idx = min(start_idx + docs_per_page, len(filtered_docs))
+            page_docs = filtered_docs.iloc[start_idx:end_idx]
+        else:
+            page_docs = filtered_docs
+
+        # Display documents
+        st.markdown(f"### Documents ({len(page_docs)} of {len(filtered_docs)} shown)")
+        for i, (_, doc) in enumerate(page_docs.iterrows()):
+            expand_default = (i < 5) and (len(page_docs) <= 20)
+            doc_id = doc.get('id', doc['original_index']) if 'id' in doc else doc['original_index']
+            with st.expander(f"Document #{doc_id} - {get_confidence_level(doc['certainty'])} Confidence",
+                             expanded=expand_default):
+                st.markdown(f"**{doc_id}:** {doc['text']}")
+                cols = st.columns(4) if 'batch_id' in doc else st.columns(3)
+                with cols[0]:
+                    st.caption(f"Original Position: #{doc['original_index']}")
+                with cols[1]:
+                    st.caption(f"Confidence: {doc['certainty']:.1%}")
+                with cols[2]:
+                    st.caption(f"Text Length: {len(doc['text'])} chars")
+                if 'batch_id' in doc and len(cols) > 3:
+                    with cols[3]:
+                        st.caption(f"Batch: {doc['batch_id']}")
+
+
+def get_confidence_level(certainty: float) -> str:
+    """Helper function to get confidence level description."""
+    if certainty >= 0.8:
+        return "High"
+    elif certainty >= 0.6:
+        return "Medium"
     else:
-        page_docs = filtered_docs
-    # Display documents
-    st.markdown(f"### 📄 Documents ({len(page_docs)} of {len(filtered_docs)} shown)")
-    for i, (_, doc) in enumerate(page_docs.iterrows()):
-        expand_default = (i < 5) and (len(page_docs) <= 20)
-        doc_id = doc.get('id', doc['original_index']) if 'id' in doc else doc['original_index']
-        with st.expander(f"Document #{doc_id} - {get_confidence_level(doc['certainty'])} Confidence",
-                         expanded=expand_default):
-            st.markdown(f"**{doc_id}:** {doc['text']}")
-            cols = st.columns(4) if 'batch_id' in doc else st.columns(3)
-            with cols[0]:
-                st.caption(f"Original Position: #{doc['original_index']}")
-            with cols[1]:
-                st.caption(f"Confidence: {doc['certainty']:.1%}")
-            with cols[2]:
-                st.caption(f"Text Length: {len(doc['text'])} chars")
-            if 'batch_id' in doc and len(cols) > 3:
-                with cols[3]:
-                    st.caption(f"Batch: {doc['batch_id']}")
+        return "Low"
 
 
 def display_global_search(df: pd.DataFrame):
@@ -780,11 +1072,18 @@ def display_global_search(df: pd.DataFrame):
         else:
             st.warning(f"No documents found matching '{global_search}' with {min_confidence:.0%}+ confidence")
 
-def run_clustering_analysis(texts: List[str], threshold: float, progress_placeholder):
+
+def run_clustering_analysis(texts: List[str], threshold: float, shingle_size: int, progress_placeholder):
     logger = PerformanceLogger()
     logger.start()
     logger.log("Initializing clustering service")
-    clustering_service = OptimizedMinHashLSHClustering(threshold=threshold)
+
+    # Pass shingle_size to the clustering service
+    clustering_service = OptimizedMinHashLSHClustering(
+        threshold=threshold,
+        shingle_size=shingle_size
+    )
+
     progress_bar = progress_placeholder.progress(0)
     status_text = progress_placeholder.empty()
     metrics_container = progress_placeholder.container()
@@ -807,30 +1106,55 @@ def run_clustering_analysis(texts: List[str], threshold: float, progress_placeho
 
     st.session_state.start_time = time.time()
     try:
-        logger.log(f"Processing {len(texts):,} documents with threshold {threshold}")
+        logger.log(f"Processing {len(texts):,} documents with threshold {threshold} and shingle size {shingle_size}")
         clustered_docs = clustering_service.cluster_documents_optimized(texts, progress_callback)
         logger.log(f"Clustering completed for {len(clustered_docs)} documents")
 
-        # Convert to dict format
+        # MODIFIED: Create result with original columns preserved
         result = []
+        original_df = st.session_state.get('file_data')
+
         for i, doc in enumerate(clustered_docs):
-            doc_id = st.session_state.get('file_data').iloc[doc.original_index].get(st.session_state.selected_id_column,
-                                                                                    doc.original_index) \
+            # Get the original row data
+            original_row = original_df.iloc[doc.original_index].to_dict()
+
+            # Get document ID
+            doc_id = original_row.get(st.session_state.selected_id_column, doc.original_index) \
                 if st.session_state.selected_id_column else doc.original_index
-            result.append({
+
+            # Create result dict starting with all original columns
+            result_row = original_row.copy()
+
+            # Add clustering results (these will overwrite if they exist in original)
+            result_row.update({
                 "id": doc_id,
-                "text": doc.text,
                 "cluster_id": doc.cluster_id,
                 "certainty": round(doc.certainty, 4),
                 "original_index": doc.original_index,
                 "batch_id": doc.batch_id
             })
+
+            result.append(result_row)
+
         logger.log(f"Conversion to result format completed")
         return result, logger
     except Exception as e:
         st.error(f"Clustering failed: {str(e)}")
         return None, logger
 
+def create_export_dataframe(clustered_data: List[Dict]) -> pd.DataFrame:
+    """Create a DataFrame for export with all original columns plus clustering results."""
+    df = pd.DataFrame(clustered_data)
+
+    # Reorder columns to put clustering results at the end
+    clustering_cols = ['cluster_id', 'certainty', 'original_index', 'batch_id']
+    other_cols = [col for col in df.columns if col not in clustering_cols]
+
+    # Put clustering columns at the end
+    ordered_cols = other_cols + clustering_cols
+    df = df[ordered_cols]
+
+    return df
 
 
 def main():
@@ -857,19 +1181,19 @@ def main():
             st.metric("Avg Confidence", f"{df['certainty'].mean():.0%}")
 
     # Header
-    st.markdown("# 📚 Text Similarity Clustering")
+    st.markdown("# CorpusClues")
     st.markdown("*Discover similar documents in your text collection using advanced MinHash LSH clustering*")
 
     # Main content
     if st.session_state.clustered_data is None and not st.session_state.processing:
         # Upload section
-        st.markdown("## 📤 Upload Your Documents")
+        st.markdown("## Upload Your Documents")
 
         col1, col2 = st.columns([2, 1])
 
         with col1:
             uploaded_file = st.file_uploader(
-                "Choose a CSV file with your texts",
+                "Make sure the texts are in a column with header 'text'.",
                 type=['csv'],
                 help="Your CSV must have a column named 'text' containing the documents to analyze. Optionally, you can select an ID column.",
                 key="file_uploader"
@@ -877,7 +1201,8 @@ def main():
             if uploaded_file is not None:
                 try:
                     # Store file data in session state immediately
-                    if 'file_data' not in st.session_state or st.session_state.get('file_name') != uploaded_file.name:
+                    if 'file_data' not in st.session_state or st.session_state.get(
+                            'file_name') != uploaded_file.name:
                         df_preview = pd.read_csv(uploaded_file)
                         st.session_state.file_data = df_preview
                         st.session_state.file_name = uploaded_file.name
@@ -909,14 +1234,6 @@ def main():
                         if len(df_preview) > 50000:
                             st.error("❌ Maximum 50,000 documents supported for Streamlit deployment")
                             st.session_state.file_data = None
-                        else:
-                            # Show sample
-                            st.markdown("**Sample documents:**")
-                            for i in range(min(3, len(df_preview))):
-                                sample_text = str(df_preview.iloc[i][text_columns[0]])[:150] + "..."
-                                sample_id = str(df_preview.iloc[i].get(st.session_state.selected_id_column,
-                                                                       i)) if st.session_state.selected_id_column else i
-                                st.markdown(f"*{sample_id}: {sample_text}*")
                     else:
                         st.error("❌ No 'text' column found. Please ensure your CSV has a column named 'text'")
                         st.session_state.file_data = None
@@ -927,22 +1244,61 @@ def main():
         with col2:
             st.markdown("**Clustering Settings**")
 
+            # Add character pattern size configuration with user-friendly language
+            pattern_size = st.selectbox(
+                "Text pattern size:",
+                options=[2, 3, 4, 5, 6, 7, 8],
+                index=2,  # Default to 4 (was 5 before)
+                format_func=lambda x: f"{x} characters",
+                key="shingle_size_select",
+                help="""
+                    **Step 1: How should text be broken down for comparison:**
+                    The system counts how many of these patterns two documents share. For example, with 4-character patterns:
+
+                    - "hello world" creates: "hell", "ello", "llo ", "lo w", "o wo", " wor", "worl", "orld"
+                    - "hello there" creates: "hell", "ello", "llo ", "lo t", "o th", " the", "ther", "here"
+                    - Shared patterns: "hell", "ello", "llo " (3 out of 8 total unique patterns)
+
+                    The more shared patterns, the more similar the documents are considered.
+
+                    **In practice:**
+                    - **Smaller patterns (2-3)**: Find more shared pieces, catch subtle similarities
+                    - **Larger patterns (6-8)**: Need longer exact matches, focus on substantial overlaps
+                """
+            )
+
             similarity_level = st.select_slider(
                 "Similarity threshold:",
                 options=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
                 value=0.3,
                 format_func=lambda x: {
-                    0.1: "Very Loose", 0.2: "Loose", 0.3: "Moderate",
-                    0.4: "Moderate+", 0.5: "Balanced", 0.6: "Strict",
-                    0.7: "Very Strict", 0.8: "Extremely Strict", 0.9: "Nearly Identical"
+                    0.1: "0.1", 0.2: "0.2", 0.3: "0.3",
+                    0.4: "0.4+", 0.5: "0.5", 0.6: "0.6",
+                    0.7: "0.7", 0.8: "0.8", 0.9: "0.9"
                 }[x],
-                key="similarity_slider"
+                key="similarity_slider",
+                help="""
+                    **Step 2: What percentage of patterns must match?**
+                    
+                    After creating patterns (above), the system counts how many patterns two documents share.
+                    
+                    **Example:**
+                    - Document A has patterns: {A, B, C, D, E}
+                    - Document B has patterns: {C, D, E, F, G}
+                    - Shared patterns: {C, D, E} = 3 patterns
+                    - Total unique patterns: {A, B, C, D, E, F, G} = 7 patterns
+                    - Similarity: 3/7 = 43%
+                    
+                    **Threshold meanings:**
+                    - **0.3 (30%)**: Documents sharing 3 out of 10 patterns get grouped
+                    - **0.7 (70%)**: Documents must share 7 out of 10 patterns to group
+                    - **0.9 (90%)**: Only nearly identical documents get grouped
+
+                """
             )
 
-            st.caption("Higher = stricter similarity requirements")
-
-            # Store similarity level in session state
             st.session_state.similarity_threshold = similarity_level
+            st.session_state.shingle_size = pattern_size  # Note: internally still called shingle_size
 
             if st.session_state.get('file_data') is not None:
                 estimated_time = max(5, len(st.session_state.file_data) // 100)
@@ -951,10 +1307,9 @@ def main():
                 if st.button("🚀 Start Analysis", type="primary", use_container_width=True):
                     st.session_state.processing = True
                     st.rerun()
-
     elif st.session_state.processing:
         # Processing section
-        st.markdown("## 🔄 Processing Your Documents")
+        st.markdown("## Processing Your Documents")
 
         st.markdown(f"""
         <div class="processing-container">
@@ -977,20 +1332,21 @@ def main():
             text_columns = [col for col in df.columns if col.lower().strip() == 'text']
             texts = df[text_columns[0]].dropna().astype(str).tolist()
 
+            # Get both threshold and shingle size from session state
+            threshold = st.session_state.get('similarity_threshold', 0.3)
+            shingle_size = st.session_state.get('shingle_size', 5)
+
             st.info(
-                f"Processing {len(texts):,} documents with {st.session_state.similarity_threshold} similarity threshold...")
+                f"Processing {len(texts):,} documents with {threshold} similarity threshold and {shingle_size}-character shingles...")
 
             # Create a single container for all progress updates
             progress_container = st.container()
 
-            # Run clustering in a separate thread to avoid blocking
-            # In the processing section of main():
-            # In the processing section of main():
+            # Run clustering
             if 'clustering_started' not in st.session_state:
                 st.session_state.clustering_started = True
-                threshold = st.session_state.get('similarity_threshold', 0.3)
                 with st.spinner("Initializing clustering analysis..."):
-                    results, logger = run_clustering_analysis(texts, threshold, progress_container)
+                    results, logger = run_clustering_analysis(texts, threshold, shingle_size, progress_container)
                 if results:
                     st.session_state.clustered_data = results
                     st.session_state.view_mode = 'overview'
@@ -1130,35 +1486,70 @@ def main():
 
             with col1:
                 st.markdown("### Download Options")
+
+                # MODIFIED: Create export DataFrame with all original columns
+                df_export = create_export_dataframe(st.session_state.clustered_data)
+
+                # Show preview of what will be exported
+                st.markdown("#### Export Preview")
+                st.markdown(f"**{len(df_export)} rows × {len(df_export.columns)} columns**")
+
+                # Show column names
+                with st.expander("📋 View All Export Columns"):
+                    original_cols = []
+                    clustering_cols = []
+
+                    for col in df_export.columns:
+                        if col in ['cluster_id', 'certainty', 'original_index', 'batch_id']:
+                            clustering_cols.append(col)
+                        else:
+                            original_cols.append(col)
+
+                    st.markdown("**Original columns from your upload:**")
+                    st.write(", ".join(original_cols))
+
+                    st.markdown("**Added clustering results:**")
+                    st.write(", ".join(clustering_cols))
+
+                # Sample preview
+                st.dataframe(df_export.head(3), use_container_width=True)
+
                 # CSV download
-                df_export = pd.DataFrame(st.session_state.clustered_data)
                 csv_data = df_export.to_csv(index=False)
                 st.download_button(
-                    label="📥 Download Results (CSV)",
+                    label="📥 Download Complete Results (CSV)",
                     data=csv_data,
-                    file_name="text_clustering_results.csv",
+                    file_name="text_clustering_results_complete.csv",
                     mime="text/csv",
                     type="primary",
-                    use_container_width=True
+                    use_container_width=True,
+                    help="Downloads all original columns plus clustering results"
                 )
+
                 # JSON download
                 json_data = []
-                for doc in st.session_state.clustered_data:
+                for _, row in df_export.iterrows():
                     # Ensure all values are JSON-serializable
-                    doc_copy = doc.copy()
-                    for k, v in doc_copy.items():
-                        if isinstance(v, (np.integer, np.floating)):
-                            doc_copy[k] = float(v) if isinstance(v, np.floating) else int(v)
+                    row_dict = {}
+                    for k, v in row.items():
+                        if pd.isna(v):
+                            row_dict[k] = None
+                        elif isinstance(v, (np.integer, np.floating)):
+                            row_dict[k] = float(v) if isinstance(v, np.floating) else int(v)
                         elif isinstance(v, (pd.Timestamp, pd.Timedelta)):
-                            doc_copy[k] = str(v)
-                    json_data.append(doc_copy)
+                            row_dict[k] = str(v)
+                        else:
+                            row_dict[k] = v
+                    json_data.append(row_dict)
+
                 json_str = json.dumps(json_data, indent=2)
                 st.download_button(
                     label="📄 Download as JSON",
                     data=json_str,
-                    file_name="text_clustering_results.json",
+                    file_name="text_clustering_results_complete.json",
                     mime="application/json",
-                    use_container_width=True
+                    use_container_width=True,
+                    help="Downloads all original columns plus clustering results in JSON format"
                 )
 
             with col2:
@@ -1174,6 +1565,40 @@ def main():
                 if 'batch_id' in df_results.columns:
                     num_batches = df_results['batch_id'].nunique()
                     st.write(f"**Batches Used:** {num_batches}")
+
+                st.markdown("### Export Options")
+
+                # Option to export only clustering results
+                clustering_only_df = df_results[
+                    ['id', 'text', 'cluster_id', 'certainty', 'original_index', 'batch_id']].copy()
+                clustering_csv = clustering_only_df.to_csv(index=False)
+
+                st.download_button(
+                    label="📊 Download Clustering Results Only",
+                    data=clustering_csv,
+                    file_name="clustering_results_only.csv",
+                    mime="text/csv",
+                    help="Downloads only the text and clustering results (original format)"
+                )
+
+                # Option to export specific clusters
+                st.markdown("#### Export Specific Clusters")
+                selected_clusters = st.multiselect(
+                    "Select clusters to export:",
+                    options=sorted(df_results['cluster_id'].unique()),
+                    key="cluster_export_select"
+                )
+
+                if selected_clusters:
+                    filtered_df = df_export[df_export['cluster_id'].isin(selected_clusters)]
+                    filtered_csv = filtered_df.to_csv(index=False)
+
+                    st.download_button(
+                        label=f"📥 Download Selected Clusters ({len(selected_clusters)} clusters, {len(filtered_df)} docs)",
+                        data=filtered_csv,
+                        file_name=f"selected_clusters_{'_'.join(map(str, selected_clusters))}.csv",
+                        mime="text/csv"
+                    )
 
                 st.markdown("### Start New Analysis")
                 if st.button("🔄 Analyze Different Documents", use_container_width=True):

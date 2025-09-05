@@ -1,7 +1,8 @@
-streamlit>=1.28.0
+streamlit>=1.30.0
 pandas>=1.5.0
 plotly>=5.0.0
 numpy>=1.21.0
 datasketch>=1.6.0
 gputil==1.4.0
 psutil==7.0.0
+networkx==3.2.1

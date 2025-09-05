@@ -6,3 +6,4 @@ datasketch>=1.6.0
 gputil==1.4.0
 psutil==7.0.0
 networkx==3.2.1
+pyvis===0.3.2

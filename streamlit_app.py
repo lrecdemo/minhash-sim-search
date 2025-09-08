@@ -506,7 +506,331 @@ class OptimizedMinHashLSHClustering:
         return total_similarity / count if count > 0 else 0.5
 
 
-# Initialize session state
+# ===== ADD THESE IMPORTS AT THE TOP (after your existing imports) =====
+import tempfile
+import shutil
+import sqlite3
+import pickle
+import os
+
+
+# ===== ADD THIS COMPLETE STREAMING CLASS (after OptimizedMinHashLSHClustering) =====
+
+class StreamingMinHashLSHClustering:
+    """
+    Streaming clustering for very large datasets (100K+ documents)
+    Uses disk storage to handle datasets that don't fit in memory
+    """
+
+    def __init__(self, threshold: float = 0.3, shingle_size: int = 4,
+                 chunk_size: int = 5000, num_perm: int = 64, temp_dir: str = None):
+        self.threshold = threshold
+        self.shingle_size = shingle_size
+        self.chunk_size = chunk_size
+        self.num_perm = num_perm
+        self.temp_dir = temp_dir or tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, "clustering.db")
+        self.doc_count = 0
+        self.all_minhashes = {}
+        self.lsh_index = MinHashLSH(threshold=self.threshold, num_perm=self.num_perm)
+        self._init_database()
+
+    def _init_database(self):
+        """Initialize SQLite database for storing signatures"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS signatures (
+                    doc_id INTEGER PRIMARY KEY,
+                    signature BLOB
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            st.error(f"Database initialization error: {e}")
+
+    def preprocess_text(self, text: str) -> str:
+        """Clean and normalize text"""
+        text = str(text).lower().strip()
+        cleaned = ''.join(c if c.isalnum() else ' ' for c in text)
+        return ' '.join(cleaned.split())
+
+    def generate_shingles(self, text: str):
+        """Generate character shingles"""
+        if len(text) < self.shingle_size:
+            return [hash(text)] if text else []
+        shingles = []
+        for i in range(len(text) - self.shingle_size + 1):
+            shingle = text[i:i + self.shingle_size]
+            shingles.append(hash(shingle))
+        return shingles
+
+    def create_minhash(self, shingles):
+        """Create MinHash from shingles"""
+        mh = MinHash(num_perm=self.num_perm)
+        if not shingles:
+            mh.update(b'empty_document')
+        else:
+            for sh in shingles:
+                mh.update(str(sh).encode('utf-8'))
+        return mh
+
+    def process_chunk(self, texts):
+        """Process a chunk of texts"""
+        chunk_minhashes = {}
+        for text in texts:
+            try:
+                clean_text = self.preprocess_text(text)
+                shingles = self.generate_shingles(clean_text)
+                mh = self.create_minhash(shingles)
+
+                doc_id = self.doc_count
+                self.doc_count += 1
+
+                chunk_minhashes[doc_id] = mh
+                self.lsh_index.insert(str(doc_id), mh)
+                self.all_minhashes[doc_id] = mh
+
+            except Exception as e:
+                st.warning(f"Error processing document {self.doc_count}: {e}")
+                self.doc_count += 1
+                continue
+
+        return chunk_minhashes
+
+    def cluster_streaming_optimized(self, texts, progress_callback=None):
+        """Main streaming clustering function with progress reporting"""
+        try:
+            chunk = []
+            chunk_count = 0
+            processed = 0
+
+            for text in texts:
+                chunk.append(text)
+
+                if len(chunk) >= self.chunk_size:
+                    if progress_callback:
+                        progress_callback(
+                            f"Processing streaming chunk {chunk_count + 1}",
+                            processed / len(texts),
+                            processed,
+                            0
+                        )
+
+                    self.process_chunk(chunk)
+                    processed += len(chunk)
+                    chunk = []
+                    chunk_count += 1
+
+            # Process remaining documents
+            if chunk:
+                self.process_chunk(chunk)
+                processed += len(chunk)
+
+            if progress_callback:
+                progress_callback("Performing streaming clustering", 0.9, processed, 0)
+
+            # Perform final clustering
+            return self._cluster_all(processed)
+
+        except Exception as e:
+            st.error(f"Streaming clustering error: {e}")
+            return {i: i for i in range(self.doc_count)}
+
+    def _cluster_all(self, num_docs):
+        """Perform Union-Find clustering"""
+        try:
+            parent = list(range(num_docs))
+
+            def find(x):
+                if parent[x] != x:
+                    parent[x] = find(parent[x])
+                return parent[x]
+
+            def union(x, y):
+                px, py = find(x), find(y)
+                if px != py:
+                    parent[py] = px
+
+            similarity_pairs = 0
+            for doc_id in range(num_docs):
+                try:
+                    if doc_id in self.all_minhashes:
+                        mh = self.all_minhashes[doc_id]
+                        candidates = self.lsh_index.query(mh)
+                        for candidate_str in candidates:
+                            candidate_id = int(candidate_str)
+                            if candidate_id != doc_id and candidate_id < num_docs:
+                                union(doc_id, candidate_id)
+                                similarity_pairs += 1
+                except Exception:
+                    continue
+
+            clusters = {}
+            cluster_map = {}
+            cluster_idx = 0
+
+            for doc_id in range(num_docs):
+                root = find(doc_id)
+                if root not in cluster_map:
+                    cluster_map[root] = cluster_idx
+                    cluster_idx += 1
+                clusters[doc_id] = cluster_map[root]
+
+            return clusters
+
+        except Exception as e:
+            st.error(f"Final clustering error: {e}")
+            return {i: 0 for i in range(num_docs)}
+
+    def cleanup(self):
+        """Clean up temporary files"""
+        try:
+            if hasattr(self, 'temp_dir') and self.temp_dir and os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir)
+        except Exception as e:
+            st.warning(f"Cleanup error: {e}")
+
+
+
+def run_clustering_analysis(texts: List[str], threshold: float, shingle_size: int,
+                            progress_placeholder, clustering_method: str = "optimized"):
+    logger = PerformanceLogger()
+    logger.start()
+    logger.log("Initializing clustering service")
+
+    # Choose clustering method based on dataset size and user preference
+    if clustering_method == "streaming" or len(texts) > 100_000:
+        clustering_service = StreamingMinHashLSHClustering(
+            threshold=threshold,
+            shingle_size=shingle_size,
+            chunk_size=min(5000, max(1000, len(texts) // 20)),
+            num_perm=64
+        )
+        is_streaming = True
+        st.info(f"Using streaming clustering for {len(texts):,} documents")
+    else:
+        clustering_service = OptimizedMinHashLSHClustering(
+            threshold=threshold,
+            shingle_size=shingle_size
+        )
+        is_streaming = False
+        st.info(f"Using optimized clustering for {len(texts):,} documents")
+
+    progress_bar = progress_placeholder.progress(0)
+    status_text = progress_placeholder.empty()
+    metrics_container = progress_placeholder.container()
+
+    def progress_callback(stage, progress, processed, clusters):
+        progress_bar.progress(min(progress, 1.0))
+        status_text.text(f"Status: {stage}")
+        logger.update_peak_memory()
+        logger.update_peak_cpu()
+        if processed > 0:
+            with metrics_container:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Processed", f"{processed:,}/{len(texts):,}")
+                with col2:
+                    st.metric("Method", "Streaming" if is_streaming else "Optimized")
+                with col3:
+                    rate = processed / max(1, (time.time() - st.session_state.start_time))
+                    st.metric("Rate", f"{rate:.1f} docs/sec")
+
+    st.session_state.start_time = time.time()
+    try:
+        logger.log(f"Processing {len(texts):,} documents with threshold {threshold} and shingle size {shingle_size}")
+
+        if is_streaming:
+            # For streaming, we get a dictionary of clusters
+            cluster_results = clustering_service.cluster_streaming_optimized(texts, progress_callback)
+
+            # Convert to ClusteredDocument format
+            clustered_docs = []
+            for i, text in enumerate(texts):
+                cluster_id = cluster_results.get(i, 0)
+                clustered_docs.append(ClusteredDocument(
+                    text=text,
+                    cluster_id=cluster_id,
+                    certainty=0.85,  # Default certainty for streaming
+                    original_index=i,
+                    batch_id=i // clustering_service.chunk_size
+                ))
+        else:
+            # Original optimized clustering
+            clustered_docs = clustering_service.cluster_documents_optimized(texts, progress_callback)
+
+        logger.log(f"Clustering completed for {len(clustered_docs)} documents")
+
+        # Create result with original columns preserved
+        result = []
+        original_df = st.session_state.get('file_data')
+
+        for i, doc in enumerate(clustered_docs):
+            # Get the original row data
+            original_row = original_df.iloc[doc.original_index].to_dict()
+
+            # Get document ID
+            doc_id = original_row.get(st.session_state.selected_id_column, doc.original_index) \
+                if st.session_state.selected_id_column else doc.original_index
+
+            # Create result dict starting with all original columns
+            result_row = original_row.copy()
+
+            # Add clustering results
+            result_row.update({
+                "id": doc_id,
+                "cluster_id": doc.cluster_id,
+                "certainty": round(doc.certainty, 4),
+                "original_index": doc.original_index,
+                "batch_id": doc.batch_id,
+                "clustering_method": "streaming" if is_streaming else "optimized"
+            })
+
+            result.append(result_row)
+
+        # Cleanup streaming resources
+        if hasattr(clustering_service, 'cleanup'):
+            clustering_service.cleanup()
+
+        logger.log(f"Conversion to result format completed")
+        return result, logger
+
+    except Exception as e:
+        # Cleanup on error
+        if hasattr(clustering_service, 'cleanup'):
+            clustering_service.cleanup()
+        st.error(f"Clustering failed: {str(e)}")
+        return None, logger
+
+
+# ===== REPLACE THE CLUSTERING SETTINGS SECTION IN main() =====
+
+
+
+# ===== ADD TO STATISTICS TAB =====
+# In the Statistics tab, after the Overview section, add:
+
+# Add clustering method information
+# st.markdown("### Clustering Method")
+# clustering_method = "unknown"
+# if st.session_state.clustered_data:
+#     first_doc = st.session_state.clustered_data[0]
+#     clustering_method = first_doc.get('clustering_method', 'optimized')
+#
+# if clustering_method == "streaming":
+#     st.write("🌊 **Streaming clustering** - Used disk storage for large dataset processing")
+#     st.write("✅ **Benefits**: Can handle unlimited dataset sizes, constant memory usage")
+#     st.write("⚠️ **Trade-offs**: Slower due to disk I/O, but much more scalable")
+# else:
+#     st.write("⚡ **Optimized clustering** - Used in-memory processing")
+#     st.write("✅ **Benefits**: Faster processing, full similarity detection")
+#     st.write("⚠️ **Trade-offs**: Limited by available RAM")
+
+
 if 'clustered_data' not in st.session_state:
     st.session_state.clustered_data = None
 if 'view_mode' not in st.session_state:
@@ -1073,75 +1397,6 @@ def display_global_search(df: pd.DataFrame):
             st.warning(f"No documents found matching '{global_search}' with {min_confidence:.0%}+ confidence")
 
 
-def run_clustering_analysis(texts: List[str], threshold: float, shingle_size: int, progress_placeholder):
-    logger = PerformanceLogger()
-    logger.start()
-    logger.log("Initializing clustering service")
-
-    # Pass shingle_size to the clustering service
-    clustering_service = OptimizedMinHashLSHClustering(
-        threshold=threshold,
-        shingle_size=shingle_size
-    )
-
-    progress_bar = progress_placeholder.progress(0)
-    status_text = progress_placeholder.empty()
-    metrics_container = progress_placeholder.container()
-
-    def progress_callback(stage, progress, processed, clusters):
-        progress_bar.progress(progress)
-        status_text.text(f"Status: {stage}")
-        logger.update_peak_memory()
-        logger.update_peak_cpu()
-        if processed > 0:
-            with metrics_container:
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Processed", f"{processed:,}/{len(texts):,}")
-                with col2:
-                    st.metric("Clusters Found", clusters)
-                with col3:
-                    rate = processed / max(1, (time.time() - st.session_state.start_time))
-                    st.metric("Rate", f"{rate:.1f} docs/sec")
-
-    st.session_state.start_time = time.time()
-    try:
-        logger.log(f"Processing {len(texts):,} documents with threshold {threshold} and shingle size {shingle_size}")
-        clustered_docs = clustering_service.cluster_documents_optimized(texts, progress_callback)
-        logger.log(f"Clustering completed for {len(clustered_docs)} documents")
-
-        # MODIFIED: Create result with original columns preserved
-        result = []
-        original_df = st.session_state.get('file_data')
-
-        for i, doc in enumerate(clustered_docs):
-            # Get the original row data
-            original_row = original_df.iloc[doc.original_index].to_dict()
-
-            # Get document ID
-            doc_id = original_row.get(st.session_state.selected_id_column, doc.original_index) \
-                if st.session_state.selected_id_column else doc.original_index
-
-            # Create result dict starting with all original columns
-            result_row = original_row.copy()
-
-            # Add clustering results (these will overwrite if they exist in original)
-            result_row.update({
-                "id": doc_id,
-                "cluster_id": doc.cluster_id,
-                "certainty": round(doc.certainty, 4),
-                "original_index": doc.original_index,
-                "batch_id": doc.batch_id
-            })
-
-            result.append(result_row)
-
-        logger.log(f"Conversion to result format completed")
-        return result, logger
-    except Exception as e:
-        st.error(f"Clustering failed: {str(e)}")
-        return None, logger
-
 def create_export_dataframe(clustered_data: List[Dict]) -> pd.DataFrame:
     """Create a DataFrame for export with all original columns plus clustering results."""
     df = pd.DataFrame(clustered_data)
@@ -1231,9 +1486,9 @@ def main():
                         else:
                             st.session_state.selected_id_column = None
                             st.info("ℹ️ No ID column detected. Using document index as ID.")
-                        if len(df_preview) > 50000:
-                            st.error("❌ Maximum 50,000 documents supported for Streamlit deployment")
-                            st.session_state.file_data = None
+                        # if len(df_preview) > 50000:
+                        #     st.error("❌ Maximum 50,000 documents supported for Streamlit deployment")
+                        #     st.session_state.file_data = None
                     else:
                         st.error("❌ No 'text' column found. Please ensure your CSV has a column named 'text'")
                         st.session_state.file_data = None
@@ -1242,71 +1497,42 @@ def main():
                     st.session_state.file_data = None
 
         with col2:
-            st.markdown("**Clustering Settings**")
+            with col2:
+                st.markdown("**Clustering Settings**")
 
-            # Add character pattern size configuration with user-friendly language
-            pattern_size = st.selectbox(
-                "Text pattern size:",
-                options=[2, 3, 4, 5, 6, 7, 8],
-                index=2,  # Default to 4 (was 5 before)
-                format_func=lambda x: f"{x} characters",
-                key="shingle_size_select",
-                help="""
-                    **Step 1: How should text be broken down for comparison:**
-                    The system counts how many of these patterns two documents share. For example, with 4-character patterns:
+                # Add character pattern size configuration with user-friendly language
+                pattern_size = st.selectbox(
+                    "Text pattern size:",
+                    options=[2, 3, 4, 5, 6, 7, 8],
+                    index=2,  # Default to 4 (was 5 before)
+                    format_func=lambda x: f"{x} characters",
+                    key="shingle_size_select",
+                    help="Size of character patterns used for comparison"
+                )
 
-                    - "hello world" creates: "hell", "ello", "llo ", "lo w", "o wo", " wor", "worl", "orld"
-                    - "hello there" creates: "hell", "ello", "llo ", "lo t", "o th", " the", "ther", "here"
-                    - Shared patterns: "hell", "ello", "llo " (3 out of 8 total unique patterns)
+                similarity_level = st.select_slider(
+                    "Similarity threshold:",
+                    options=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+                    value=0.3,
+                    format_func=lambda x: {
+                        0.1: "0.1", 0.2: "0.2", 0.3: "0.3",
+                        0.4: "0.4+", 0.5: "0.5", 0.6: "0.6",
+                        0.7: "0.7", 0.8: "0.8", 0.9: "0.9"
+                    }[x],
+                    key="similarity_slider",
+                    help="Minimum similarity required to group documents"
+                )
 
-                    The more shared patterns, the more similar the documents are considered.
+                st.session_state.similarity_threshold = similarity_level
+                st.session_state.shingle_size = pattern_size
 
-                    **In practice:**
-                    - **Smaller patterns (2-3)**: Find more shared pieces, catch subtle similarities
-                    - **Larger patterns (6-8)**: Need longer exact matches, focus on substantial overlaps
-                """
-            )
+                if st.session_state.get('file_data') is not None:
+                    estimated_time = max(5, len(st.session_state.file_data) // 100)
+                    st.caption(f"Estimated processing time: ~{estimated_time} seconds")
 
-            similarity_level = st.select_slider(
-                "Similarity threshold:",
-                options=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
-                value=0.3,
-                format_func=lambda x: {
-                    0.1: "0.1", 0.2: "0.2", 0.3: "0.3",
-                    0.4: "0.4+", 0.5: "0.5", 0.6: "0.6",
-                    0.7: "0.7", 0.8: "0.8", 0.9: "0.9"
-                }[x],
-                key="similarity_slider",
-                help="""
-                    **Step 2: What percentage of patterns must match?**
-                    
-                    After creating patterns (above), the system counts how many patterns two documents share.
-                    
-                    **Example:**
-                    - Document A has patterns: {A, B, C, D, E}
-                    - Document B has patterns: {C, D, E, F, G}
-                    - Shared patterns: {C, D, E} = 3 patterns
-                    - Total unique patterns: {A, B, C, D, E, F, G} = 7 patterns
-                    - Similarity: 3/7 = 43%
-                    
-                    **Threshold meanings:**
-                    - **0.3 (30%)**: Documents sharing 3 out of 10 patterns get grouped
-                    - **0.7 (70%)**: Documents must share 7 out of 10 patterns to group
-                    - **0.9 (90%)**: Only nearly identical documents get grouped
-
-                """
-            )
-
-            st.session_state.similarity_threshold = similarity_level
-            st.session_state.shingle_size = pattern_size  # Note: internally still called shingle_size
-
-            if st.session_state.get('file_data') is not None:
-                estimated_time = max(5, len(st.session_state.file_data) // 100)
-                st.caption(f"Estimated processing time: ~{estimated_time} seconds")
-
-                if st.button("🚀 Start Analysis", type="primary", use_container_width=True):
-                    st.session_state.processing = True
-                    st.rerun()
+                    if st.button("🚀 Start Analysis", type="primary", use_container_width=True):
+                        st.session_state.processing = True
+                        st.rerun()
     elif st.session_state.processing:
         # Processing section
         st.markdown("## Processing Your Documents")
@@ -1346,7 +1572,8 @@ def main():
             if 'clustering_started' not in st.session_state:
                 st.session_state.clustering_started = True
                 with st.spinner("Initializing clustering analysis..."):
-                    results, logger = run_clustering_analysis(texts, threshold, shingle_size, progress_container)
+                    clustering_method = st.session_state.get('clustering_method', 'optimized')
+                    results, logger = run_clustering_analysis(texts, threshold, shingle_size, progress_container, clustering_method)
                 if results:
                     st.session_state.clustered_data = results
                     st.session_state.view_mode = 'overview'

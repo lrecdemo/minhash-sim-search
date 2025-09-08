@@ -27,7 +27,16 @@ import psutil
 import platform
 from datetime import datetime
 
-
+def calculate_optimal_batch_size(dataset_size: int) -> int:
+    """Calculate optimal batch size based on dataset size"""
+    if dataset_size <= 5000:
+        return 1000  # Small datasets: smaller batches
+    elif dataset_size <= 20000:
+        return 2500  # Medium datasets
+    elif dataset_size <= 100_000:
+        return 5000  # Large datasets
+    else:
+        return 10000  # Very large datasets: biggest jumps
 def display_cluster_graph(df: pd.DataFrame, cluster_id: int, threshold: float = 0.3):
     cluster_docs = df[df['cluster_id'] == cluster_id].copy()
     if len(cluster_docs) < 2:
@@ -724,6 +733,11 @@ def run_clustering_analysis(texts: List[str], threshold: float, shingle_size: in
     status_text = progress_placeholder.empty()
     metrics_container = progress_placeholder.container()
 
+    optimal_batch_size = calculate_optimal_batch_size(len(texts))
+    if not is_streaming:
+        clustering_service.batch_size = optimal_batch_size
+        st.info(f"Using batch size: {optimal_batch_size:,} documents")
+
     def progress_callback(stage, progress, processed, clusters):
         progress_bar.progress(min(progress, 1.0))
         status_text.text(f"Status: {stage}")
@@ -998,10 +1012,20 @@ def display_cluster_overview(df: pd.DataFrame):
             cluster_docs = df[df['cluster_id'] == cluster_id]
             top_docs = cluster_docs.nlargest(3, 'certainty')
             for idx, (_, doc) in enumerate(top_docs.iterrows()):
-                doc_id = doc.get('id', doc['original_index']) if 'id' in doc else doc['original_index']
+                # Convert doc to dictionary if it's not already
+                if hasattr(doc, 'to_dict'):
+                    doc_dict = doc.to_dict()
+                else:
+                    doc_dict = doc
+
+                doc_id = doc_dict.get('id', doc_dict['original_index']) if 'id' in doc_dict else doc_dict[
+                    'original_index']
+                text_preview = str(doc_dict.get('text', ''))[:100]
+                certainty = doc_dict.get('certainty', 0)
+
                 st.markdown(f"""
                 <div style="margin-bottom: 0.5rem;">
-                    <strong>Preview {idx + 1}:</strong> {doc_id}: {doc['text'][:100]}... <span style="color: #667eea;">{get_confidence_emoji_and_text(doc['certainty'])}</span>
+                    <strong>Preview {idx + 1}:</strong> {doc_id}: {text_preview}... <span style="color: #667eea;">{get_confidence_emoji_and_text(certainty)}</span>
                 </div>
                 """, unsafe_allow_html=True)
 

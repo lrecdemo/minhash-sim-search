@@ -28,7 +28,7 @@ services:
       --server.enableXsrfProtection=false
       --server.enableCORS=false
       --logger.level=debug
-      --browser.serverAddress="lrec2026.myaddr.tools"
+      --browser.serverAddress="lrec2016.myaddr.tools"
     restart: unless-stopped
     deploy:
       resources:

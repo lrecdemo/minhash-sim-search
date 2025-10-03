@@ -9,14 +9,23 @@ Historical Texts Using MinHash-LSH", submitted for LREC2026.
 
 #### Running from source
 1. Clone the repository
-2. Install dependencies: ```pip install -r requirements.txt```
-3. Run the application" ```streamlit run streamlit_app.py```
-4. Access the interface at http://localhost:8501
+2. Generate a new virtual environment.
+3. Install dependencies: ```pip install -r app/requirements.txt```
+4. ```cd app```
+5. Run the application" ```streamlit run main.py```
+6. Access the interface at http://localhost:8501
 
 
 #### Running from Docker
 1. Clone the repository
 2. Run ```docker-compose up --build -d```
+
+#### Running the benchmarks
+
+For running the quality benchmark, ```cd``` to the benchmark folder and run ```python benchmark_quality.py```. 
+
+For running the performance benchmark, modify the path to the performance benchmark .csv in ```benchmark_performance.py```. The original dataset used in the paper was based upon the Integrating Digital Papyrology project (https://github.com/papyri/idp.data) but could not be included due to size and licensing constraints.
+
 
 ### Usage
 

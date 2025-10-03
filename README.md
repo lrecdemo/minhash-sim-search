@@ -19,6 +19,8 @@ Historical Texts Using MinHash-LSH", submitted for LREC2026.
 #### Running from Docker
 1. Clone the repository
 2. Run ```docker-compose up --build -d```
+3. Access the interface at http://localhost:8502
+
 
 #### Running the benchmarks
 

@@ -15,33 +15,32 @@ def display_cluster_overview(df: pd.DataFrame):
         )
         .reset_index()
     )
-
-    cluster_stats = cluster_stats.sort_values(
-        by=['size', 'avg_confidence'],
-        ascending=[False, False]
-    )
+    cluster_stats['composite_score'] = cluster_stats['size'] * cluster_stats['avg_confidence']
+    cluster_stats = cluster_stats.sort_values(by='composite_score', ascending=False)
 
     with st.expander("Filter & Sort Clusters", expanded=False):
         min_size, max_size = int(cluster_stats['size'].min()), int(cluster_stats['size'].max())
         min_conf, max_conf = float(cluster_stats['avg_confidence'].min()), float(cluster_stats['avg_confidence'].max())
-
         col1, col2, col3 = st.columns(3)
         with col1:
             sort_by = st.selectbox(
                 "Sort clusters by:",
-                options=['size', 'avg_confidence'],
+                options=['composite_score', 'size', 'avg_confidence'],
                 index=0,
-                format_func=lambda x: 'Cluster Size' if x == 'size' else 'Average Confidence',
+                format_func=lambda x: {
+                    'composite_score': 'Size & Confidence',
+                    'size': 'Cluster Size',
+                    'avg_confidence': 'Average Confidence'
+                }[x],
                 key="sort_by"
             )
             sort_order = st.selectbox(
                 "Sort order:",
                 options=['desc', 'asc'],
                 index=0,
-                format_func=lambda x: 'Largest/Highest First' if x == 'desc' else 'Smallest/Lowest First',
+                format_func=lambda x: 'Highest First' if x == 'desc' else 'Lowest First',
                 key="sort_order"
             )
-
         with col2:
             selected_min_size = st.number_input(
                 "Minimum Cluster Size",
@@ -82,24 +81,22 @@ def display_cluster_overview(df: pd.DataFrame):
         (cluster_stats['size'] <= selected_max_size) &
         (cluster_stats['avg_confidence'] >= selected_min_conf) &
         (cluster_stats['avg_confidence'] <= selected_max_conf)
-        ]
-
+    ]
     ascending_order = sort_order == 'asc'
-    if sort_by == 'size':
-        filtered_clusters = filtered_clusters.sort_values(['size', 'avg_confidence'],
-                                                          ascending=[ascending_order, False])
+    if sort_by == 'composite_score':
+        filtered_clusters = filtered_clusters.sort_values('composite_score', ascending=ascending_order)
+    elif sort_by == 'size':
+        filtered_clusters = filtered_clusters.sort_values(['size', 'avg_confidence'], ascending=[ascending_order, False])
     else:
-        filtered_clusters = filtered_clusters.sort_values(['avg_confidence', 'size'],
-                                                          ascending=[ascending_order, False])
+        filtered_clusters = filtered_clusters.sort_values(['avg_confidence', 'size'], ascending=[ascending_order, False])
 
     total_clusters = len(filtered_clusters)
     if total_clusters == 0:
         st.warning("No clusters match the filter criteria.")
         return
-
     st.info(
-        f"Showing {total_clusters} clusters, sorted by {sort_by.replace('_', ' ')} ({'largest' if sort_by == 'size' and not ascending_order else 'highest' if not ascending_order else 'smallest' if sort_by == 'size' else 'lowest'} first)")
-
+        f"Showing {total_clusters} clusters, sorted by {sort_by.replace('_', ' ')} ({'highest' if not ascending_order else 'lowest'} first)"
+    )
     clusters_per_page = 10
     total_pages = (total_clusters - 1) // clusters_per_page + 1
     current_page = st.selectbox(

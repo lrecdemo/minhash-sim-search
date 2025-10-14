@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import requests
 import xml.etree.ElementTree as ET
 import pandas as pd
@@ -46,15 +45,14 @@ def main():
                 'period_max': period_max,
                 'genre': genre,
                 'place': place,
-                'sentence': sentence_text
+                'text': sentence_text
             })
 
     df = pd.DataFrame(rows)
-    df_no_gaps = df[~df['sentence'].str.contains(r'\|gap=', regex=True)]
+    df_no_gaps = df[~df['text'].str.contains(r'\|gap=', regex=True)]
     df_no_gaps = df_no_gaps.reset_index(drop=True)
-    df_no_gaps['sentence'] = df_no_gaps['sentence'].str.replace(r'\[0\]$', '', regex=True)
+    df_no_gaps['text'] = df_no_gaps['text'].str.replace(r'\[0\]$', '', regex=True)
     df_no_gaps.to_csv('papyri_sentences_no_gaps_clean.csv', index=False)
-    print("✅ CSV saved: papyri_sentences_no_gaps_clean.csv")
 
 if __name__ == "__main__":
     main()

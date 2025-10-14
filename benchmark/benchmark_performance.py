@@ -550,9 +550,7 @@ class EnhancedScalabilityProofGenerator:
 
 
 if __name__ == "__main__":
-    # csv_path = "../test.csv"
-
-    csv_path = "../papyri_sentences_no_gaps_clean.csv"
+    csv_path = "papyri_sentences_no_gaps_clean.csv"
     output_folder = os.path.join(script_dir, "benchmark_performance_results")
     os.makedirs(output_folder, exist_ok=True)
     log_file = os.path.join(output_folder, "scalability_log.txt")

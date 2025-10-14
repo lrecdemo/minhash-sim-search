@@ -837,6 +837,10 @@ def main():
                     st.session_state.clustered_data = None
                     st.session_state.view_mode = 'overview'
                     st.session_state.processing = False
+                    if 'clustering_completed' in st.session_state:
+                        del st.session_state.clustering_completed
+                    if 'clustering_started' in st.session_state:
+                        del st.session_state.clustering_started
                     st.rerun()
 
 if __name__ == "__main__":

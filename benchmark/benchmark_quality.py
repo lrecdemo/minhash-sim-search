@@ -69,107 +69,12 @@ def calculate_cluster_purities(labels, pred_labels):
     }
 
 
-def create_comprehensive_heatmaps(plot_data, experiment_name, results_dir):
-    print(f"  Creating comprehensive heatmap for {experiment_name}...")
-
-    metrics_list = [
-        ('ari', 'ARI'),
-        ('v_measure', 'V-measure'),
-        ('purity', 'Purity'),
-        ('mean_group_purity', 'Group Purity'),
-        ('mean_cluster_purity', 'Cluster Purity'),
-        ('over_clustering_ratio', 'Overclust. Ratio'),
-        ('num_pred_clusters', 'Num Clusters'),
-        ('perfect_group_purity_pct', 'Perfect Groups %')
-    ]
-
-    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
-    fig.suptitle(f'Clustering Quality Metrics - {experiment_name}', fontsize=16, fontweight='bold')
-
-    for idx, (metric, title) in enumerate(metrics_list):
-        row = idx // 4
-        col = idx % 4
-        ax = axes[row, col]
-
-        pivot_data = plot_data.pivot(index='shingle_size', columns='jaccard_threshold', values=metric)
-
-        if metric in ['over_clustering_ratio', 'num_pred_clusters']:
-            cmap = 'RdYlGn_r'
-        else:
-            cmap = 'RdYlGn'
-
-        sns.heatmap(pivot_data, annot=True, fmt='.3f', cmap=cmap, ax=ax, cbar_kws={'label': title})
-        ax.set_title(title, fontweight='bold', fontsize=12)
-        ax.set_xlabel('Jaccard Threshold', fontsize=10)
-        ax.set_ylabel('Shingle Size', fontsize=10)
-
-    plt.tight_layout()
-    filename = f'comprehensive_metrics_{experiment_name.lower().replace(" ", "_")}.png'
-    plt.savefig(os.path.join(results_dir, filename), dpi=300, bbox_inches='tight')
-    plt.close()
-
-
-def create_single_heatmap(data, metric_type, preprocessing_suffix, results_dir):
-    print(f"  Creating single heatmap: {metric_type} - {preprocessing_suffix}")
-
-    fig, ax = plt.subplots(1, 1, figsize=(8, 6))
-
-    if metric_type == 'ari_vmeasure':
-        pivot_ari = data.pivot(index='shingle_size', columns='jaccard_threshold', values='ari')
-        pivot_vm = data.pivot(index='shingle_size', columns='jaccard_threshold', values='v_measure')
-
-        sns.heatmap(pivot_ari, annot=False, cmap='RdYlGn', ax=ax,
-                    cbar_kws={'label': 'ARI Score'}, vmin=0, vmax=1)
-
-        for i, shingle in enumerate(pivot_ari.index):
-            for j, threshold in enumerate(pivot_ari.columns):
-                ari_val = pivot_ari.loc[shingle, threshold]
-                vm_val = pivot_vm.loc[shingle, threshold]
-                text = f'{ari_val:.2f}\n{vm_val:.2f}'
-                text_color = 'white' if ari_val < 0.5 else 'black'
-                ax.text(j + 0.5, i + 0.5, text, ha='center', va='center',
-                        color=text_color, fontsize=10, weight='bold', linespacing=0.9)
-
-        ax.set_title(f'ARI (top) / V-measure (bottom) - {preprocessing_suffix}',
-                     fontweight='bold', fontsize=12, pad=6)
-        filename = f'single_ari_vmeasure_{preprocessing_suffix}.png'
-
-    else:
-        pivot_purity = data.pivot(index='shingle_size', columns='jaccard_threshold',
-                                  values='mean_group_purity')
-        pivot_over = data.pivot(index='shingle_size', columns='jaccard_threshold',
-                                values='over_clustering_ratio')
-
-        sns.heatmap(pivot_purity, annot=False, cmap='RdYlGn', ax=ax,
-                    cbar_kws={'label': 'Group Purity'}, vmin=0, vmax=1)
-
-        for i, shingle in enumerate(pivot_purity.index):
-            for j, threshold in enumerate(pivot_purity.columns):
-                purity_val = pivot_purity.loc[shingle, threshold]
-                over_val = pivot_over.loc[shingle, threshold]
-                text = f'{purity_val:.2f}\n{over_val:.2f}'
-                text_color = 'white' if purity_val < 0.5 else 'black'
-                ax.text(j + 0.5, i + 0.5, text, ha='center', va='center',
-                        color=text_color, fontsize=10, weight='bold', linespacing=0.9)
-
-        ax.set_title(f'Group Purity (top) / Overclust. Ratio (bottom) - {preprocessing_suffix}',
-                     fontweight='bold', fontsize=12, pad=6)
-        filename = f'single_purity_overclustering_{preprocessing_suffix}.png'
-
-    ax.set_xlabel('Jaccard Threshold', fontsize=11)
-    ax.set_ylabel('Shingle Size', fontsize=11)
-
-    plt.tight_layout(pad=0.2)
-    plt.savefig(os.path.join(results_dir, filename), dpi=300, bbox_inches='tight')
-    plt.close()
-
-
 def run_clustering_experiment_enhanced(texts, labels, experiment_name, method='optimized',
                                        preprocess_options=None):
     print(f"\nRunning {experiment_name} experiment with {method} method...")
 
     shingle_sizes = [2, 3, 4, 5, 6]
-    jaccard_thresholds = [0.2, 0.3, 0.5, 0.7, 0.8, 0.9]
+    jaccard_thresholds = [0.2, 0.3, 0.4, 0.5, 0.6]
 
     plot_data = []
 
@@ -221,126 +126,73 @@ def run_clustering_experiment_enhanced(texts, labels, experiment_name, method='o
     return pd.DataFrame(plot_data)
 
 
-def create_side_by_side_combined_heatmaps(data_dict, results_dir, suffix=''):
-    print(f"\nCreating combined heatmaps{' (' + suffix + ')' if suffix else ''}...")
+def create_individual_heatmaps(data_dict, results_dir, suffix=''):
+    print(f"\nCreating individual heatmaps{' (' + suffix + ')' if suffix else ''}...")
 
-    methods = list(data_dict.keys())
-    n_methods = len(methods)
+    cmap = 'viridis'
 
-    fig, axes = plt.subplots(1, n_methods, figsize=(8 * n_methods, 6))
-    if n_methods == 1:
-        axes = [axes]
+    for method, data in data_dict.items():
+        method_safe = method.lower().replace(' ', '_')
 
-    for idx, (method, data) in enumerate(data_dict.items()):
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+
         pivot_ari = data.pivot(index='shingle_size', columns='jaccard_threshold', values='ari')
         pivot_vm = data.pivot(index='shingle_size', columns='jaccard_threshold', values='v_measure')
 
-        sns.heatmap(pivot_ari, annot=False, cmap='RdYlGn', ax=axes[idx],
+        sns.heatmap(pivot_ari, annot=False, cmap=cmap, ax=ax,
                     cbar_kws={'label': 'ARI Score'}, vmin=0, vmax=1)
 
         for i, shingle in enumerate(pivot_ari.index):
             for j, threshold in enumerate(pivot_ari.columns):
                 ari_val = pivot_ari.loc[shingle, threshold]
                 vm_val = pivot_vm.loc[shingle, threshold]
-                text = f'{ari_val:.2f}\n{vm_val:.2f}'
+                text = f'{ari_val:.3f}\n{vm_val:.3f}'
                 text_color = 'white' if ari_val < 0.5 else 'black'
-                axes[idx].text(j + 0.5, i + 0.5, text, ha='center', va='center',
-                               color=text_color, fontsize=10, weight='bold', linespacing=0.9)
+                ax.text(j + 0.5, i + 0.5, text, ha='center', va='center',
+                        color=text_color, fontsize=14, weight='bold', linespacing=0.9)
 
-        axes[idx].set_title(f'{method}\nARI (top) / V-measure (bottom)',
-                            fontweight='bold', fontsize=12, pad=6)
-        axes[idx].set_xlabel('Jaccard Threshold', fontsize=11)
-        axes[idx].set_ylabel('Shingle Size', fontsize=11)
+        ax.set_title(f'{method}\nARI (top) / V-measure (bottom)',
+                     fontweight='bold', fontsize=12, pad=6)
+        ax.set_xlabel('Jaccard Threshold', fontsize=11)
+        ax.set_ylabel('Shingle Size', fontsize=11)
 
-    plt.tight_layout(pad=0.2)
-    filename = f'sidebyside_ari_vmeasure{"_" + suffix if suffix else ""}.png'
-    plt.savefig(os.path.join(results_dir, filename), dpi=300, bbox_inches='tight')
-    plt.close()
+        plt.tight_layout(pad=0.1)
+        filename = f'{method_safe}_ari_vmeasure{"_" + suffix if suffix else ""}.png'
+        plt.savefig(os.path.join(results_dir, filename), dpi=300, bbox_inches='tight', pad_inches=0.05)
+        plt.close()
+        print(f"  Saved: {filename}")
 
-    fig, axes = plt.subplots(1, n_methods, figsize=(8 * n_methods, 6))
-    if n_methods == 1:
-        axes = [axes]
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
 
-    for idx, (method, data) in enumerate(data_dict.items()):
         pivot_purity = data.pivot(index='shingle_size', columns='jaccard_threshold',
                                   values='mean_group_purity')
         pivot_over = data.pivot(index='shingle_size', columns='jaccard_threshold',
                                 values='over_clustering_ratio')
 
-        sns.heatmap(pivot_purity, annot=False, cmap='RdYlGn', ax=axes[idx],
+        sns.heatmap(pivot_purity, annot=False, cmap=cmap, ax=ax,
                     cbar_kws={'label': 'Group Purity'}, vmin=0, vmax=1)
 
         for i, shingle in enumerate(pivot_purity.index):
             for j, threshold in enumerate(pivot_purity.columns):
                 purity_val = pivot_purity.loc[shingle, threshold]
                 over_val = pivot_over.loc[shingle, threshold]
-                text = f'{purity_val:.2f}\n{over_val:.2f}'
+                text = f'{purity_val:.3f}\n{over_val:.3f}'
                 text_color = 'white' if purity_val < 0.5 else 'black'
-                axes[idx].text(j + 0.5, i + 0.5, text, ha='center', va='center',
-                               color=text_color, fontsize=10, weight='bold', linespacing=0.9)
+                ax.text(j + 0.5, i + 0.5, text, ha='center', va='center',
+                        color=text_color, fontsize=14, weight='bold', linespacing=0.9)
 
-        axes[idx].set_title(f'{method}\nGroup Purity (top) / Overclust. Ratio (bottom)',
-                            fontweight='bold', fontsize=12, pad=6)
-        axes[idx].set_xlabel('Jaccard Threshold', fontsize=11)
-        axes[idx].set_ylabel('Shingle Size', fontsize=11)
+        ax.set_title(f'{method}\nGroup Purity (top) / Overclust. Ratio (bottom)',
+                     fontweight='bold', fontsize=12, pad=6)
+        ax.set_xlabel('Jaccard Threshold', fontsize=11)
+        ax.set_ylabel('Shingle Size', fontsize=11)
 
-    plt.tight_layout(pad=0.2)
-    filename = f'sidebyside_purity_overclustering{"_" + suffix if suffix else ""}.png'
-    plt.savefig(os.path.join(results_dir, filename), dpi=300, bbox_inches='tight')
-    plt.close()
+        plt.tight_layout(pad=0.1)
+        filename = f'{method_safe}_purity_overclustering{"_" + suffix if suffix else ""}.png'
+        plt.savefig(os.path.join(results_dir, filename), dpi=300, bbox_inches='tight', pad_inches=0.05)
+        plt.close()
+        print(f"  Saved: {filename}")
 
-    print("Combined heatmaps created successfully!")
-
-
-def create_method_difference_heatmaps(optimized_data, streaming_data, preprocessing_suffix, results_dir):
-    print(f"  Creating method difference heatmaps for {preprocessing_suffix}...")
-
-    metrics_to_compare = [
-        ('ari', 'ARI Difference'),
-        ('v_measure', 'V-measure Difference'),
-        ('mean_group_purity', 'Group Purity Difference'),
-        ('over_clustering_ratio', 'Overclustering Ratio Difference')
-    ]
-
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle(f'Streaming vs Optimized Method Differences - {preprocessing_suffix.title()}',
-                 fontsize=16, fontweight='bold')
-
-    for idx, (metric, title) in enumerate(metrics_to_compare):
-        row = idx // 2
-        col = idx % 2
-        ax = axes[row, col]
-
-        pivot_opt = optimized_data.pivot(index='shingle_size', columns='jaccard_threshold', values=metric)
-        pivot_stream = streaming_data.pivot(index='shingle_size', columns='jaccard_threshold', values=metric)
-
-        difference = pivot_stream - pivot_opt
-
-        max_abs_diff = max(abs(difference.min().min()), abs(difference.max().max()))
-        vmin = -max_abs_diff if max_abs_diff > 0 else -0.01
-        vmax = max_abs_diff if max_abs_diff > 0 else 0.01
-
-        sns.heatmap(difference, annot=True, fmt='.3f', cmap='RdBu_r', ax=ax,
-                    center=0, vmin=vmin, vmax=vmax,
-                    cbar_kws={'label': 'Streaming - Optimized'})
-
-        ax.set_title(f'{title}\n(Streaming - Optimized)', fontweight='bold', fontsize=12)
-        ax.set_xlabel('Jaccard Threshold', fontsize=10)
-        ax.set_ylabel('Shingle Size', fontsize=10)
-
-    plt.tight_layout()
-    filename = f'method_differences_{preprocessing_suffix}.png'
-    plt.savefig(os.path.join(results_dir, filename), dpi=300, bbox_inches='tight')
-    plt.close()
-
-    mean_abs_differences = {}
-    for metric, _ in metrics_to_compare:
-        pivot_opt = optimized_data.pivot(index='shingle_size', columns='jaccard_threshold', values=metric)
-        pivot_stream = streaming_data.pivot(index='shingle_size', columns='jaccard_threshold', values=metric)
-        difference = pivot_stream - pivot_opt
-        mean_abs_differences[metric] = abs(difference).values.mean()
-
-    return mean_abs_differences
+    print("Individual heatmaps created successfully!")
 
 
 def save_comprehensive_summary(results_dict, results_dir, sample_info):
@@ -482,71 +334,17 @@ if __name__ == "__main__":
         method='streaming', preprocess_options=full_preprocessing
     )
 
-    print("\nCreating comprehensive metric heatmaps...")
-    for preprocessing_type, methods in all_results.items():
-        for method_name, data in methods.items():
-            create_comprehensive_heatmaps(data, f"{preprocessing_type} - {method_name}", results_dir)
-
-    print("\nCreating side-by-side comparison visualizations...")
-    create_side_by_side_combined_heatmaps(
+    print("\nCreating individual heatmaps...")
+    create_individual_heatmaps(
         all_results['Original Text (No Preprocessing)'],
         results_dir,
         suffix='original'
     )
-    create_side_by_side_combined_heatmaps(
+    create_individual_heatmaps(
         all_results['Preprocessed Text (Full Preprocessing)'],
         results_dir,
         suffix='preprocessed'
     )
-
-    print("\nCreating single heatmaps for optimized method only...")
-    create_single_heatmap(
-        all_results['Original Text (No Preprocessing)']['Optimized'],
-        'ari_vmeasure',
-        'original',
-        results_dir
-    )
-    create_single_heatmap(
-        all_results['Original Text (No Preprocessing)']['Optimized'],
-        'purity_overclustering',
-        'original',
-        results_dir
-    )
-    create_single_heatmap(
-        all_results['Preprocessed Text (Full Preprocessing)']['Optimized'],
-        'ari_vmeasure',
-        'preprocessed',
-        results_dir
-    )
-    create_single_heatmap(
-        all_results['Preprocessed Text (Full Preprocessing)']['Optimized'],
-        'purity_overclustering',
-        'preprocessed',
-        results_dir
-    )
-
-    print("\nCreating method difference heatmaps...")
-    diff_original = create_method_difference_heatmaps(
-        all_results['Original Text (No Preprocessing)']['Optimized'],
-        all_results['Original Text (No Preprocessing)']['Streaming'],
-        'original',
-        results_dir
-    )
-    diff_preprocessed = create_method_difference_heatmaps(
-        all_results['Preprocessed Text (Full Preprocessing)']['Optimized'],
-        all_results['Preprocessed Text (Full Preprocessing)']['Streaming'],
-        'preprocessed',
-        results_dir
-    )
-
-    print("\nMethod Difference Summary:")
-    print("\nOriginal Text (No Preprocessing):")
-    for metric, mean_abs_diff in diff_original.items():
-        print(f"  Mean absolute {metric} difference: {mean_abs_diff:.4f}")
-
-    print("\nPreprocessed Text (Full Preprocessing):")
-    for metric, mean_abs_diff in diff_preprocessed.items():
-        print(f"  Mean absolute {metric} difference: {mean_abs_diff:.4f}")
 
     save_comprehensive_summary(all_results, results_dir, sample_info)
 

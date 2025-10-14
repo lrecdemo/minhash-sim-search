@@ -1,5 +1,6 @@
 import os
 import warnings
+
 warnings.filterwarnings('ignore', message='.*ScriptRunContext.*')
 warnings.filterwarnings('ignore', message='.*missing ScriptRunContext.*')
 import pandas as pd
@@ -16,6 +17,7 @@ from scipy import stats
 import ctypes
 import threading
 import sys
+
 warnings.filterwarnings('ignore')
 script_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(script_dir, '..'))
@@ -23,6 +25,7 @@ app_dir = os.path.join(parent_dir, 'app')
 sys.path.append(app_dir)
 from minhash_clustering.cluster_in_mem import MemMinhashLSHClustering
 from minhash_clustering.cluster_streaming import StreamingMinHashLSHClustering
+
 
 @dataclass
 class ScalabilityResult:
@@ -40,11 +43,11 @@ class ScalabilityResult:
     peak_rss_mb: float = 0
     memory_before_mb: float = 0
 
+
 class EnhancedScalabilityProofGenerator:
-    """Enhanced scalability benchmark that finds real breaking points"""
     def __init__(self, csv_file: str, memory_limit_percent: float = 0.60, log_file: str = None):
         self.csv_file = csv_file
-        self.system_memory_gb = psutil.virtual_memory().total / (1024**3)
+        self.system_memory_gb = psutil.virtual_memory().total / (1024 ** 3)
         self.memory_limit_percent = memory_limit_percent
         self.safe_memory_limit_gb = self.system_memory_gb * memory_limit_percent
         self.safe_memory_limit_mb = self.safe_memory_limit_gb * 1024
@@ -54,18 +57,16 @@ class EnhancedScalabilityProofGenerator:
         self.optimized_failure_size = None
         self.log_file = log_file
         self._log(f"System Memory: {self.system_memory_gb:.1f} GB")
-        self._log(f"Memory Limit ({memory_limit_percent*100:.0f}%): {self.safe_memory_limit_gb:.1f} GB")
+        self._log(f"Memory Limit ({memory_limit_percent * 100:.0f}%): {self.safe_memory_limit_gb:.1f} GB")
         self.load_real_data()
 
     def _log(self, message: str):
-        """Log message to both console and log file"""
         print(message)
         if self.log_file:
             with open(self.log_file, 'a') as f:
                 f.write(message + '\n')
 
     def load_real_data(self):
-        """Load and prepare real data from CSV"""
         try:
             self._log(f"Loading data from {self.csv_file}...")
             df = pd.read_csv(self.csv_file)
@@ -75,10 +76,7 @@ class EnhancedScalabilityProofGenerator:
             text_col = text_columns[0]
             self._log(f"Using text column: '{text_col}'")
             texts = df[text_col].dropna().astype(str).tolist()
-            self.real_documents = [
-                text.strip() for text in texts
-                if 20 <= len(text.strip()) <= 2000
-            ]
+            self.real_documents = [text.strip() for text in texts if text.strip()]
             self._log(f"Loaded {len(self.real_documents):,} valid documents")
             lengths = [len(text) for text in self.real_documents[:1000]]
             self._log(f"  Min: {min(lengths)}, Max: {max(lengths)}, Avg: {np.mean(lengths):.1f}")
@@ -86,7 +84,6 @@ class EnhancedScalabilityProofGenerator:
             raise Exception(f"Failed to load {self.csv_file}: {e}")
 
     def force_memory_cleanup(self):
-        """Aggressive memory cleanup"""
         gc.collect()
         gc.collect()
         try:
@@ -101,23 +98,22 @@ class EnhancedScalabilityProofGenerator:
         time.sleep(0.5)
 
     def get_memory_usage(self) -> float:
-        """Get current memory usage in MB"""
         process = psutil.Process()
-        return process.memory_info().rss / (1024**2)
+        return process.memory_info().rss / (1024 ** 2)
 
-    def generate_test_sizes(self, start: int = 5000, growth_factor: float = 1.4, max_size: Optional[int] = None):
-        """Generate exponentially growing test sizes"""
+    def generate_test_sizes(self, start=1000, growth_factor=2, max_size=None):
         sizes = []
         current = start
         if max_size is None:
             max_size = len(self.real_documents)
-        while current <= max_size:
+        while current < max_size:
             sizes.append(int(current))
             current *= growth_factor
+        if sizes[-1] != max_size:
+            sizes.append(max_size)  # ensure full dataset is tested
         return sizes
 
     def create_dataset(self, size: int) -> List[str]:
-        """Create dataset of specified size from real documents"""
         if size <= len(self.real_documents):
             return random.sample(self.real_documents, size)
         else:
@@ -132,7 +128,6 @@ class EnhancedScalabilityProofGenerator:
             return result
 
     def estimate_memory_needs(self, size: int, method: str) -> float:
-        """Estimate memory requirements in MB"""
         if not self.results:
             return size * 0.002 if method == "optimized" else max(50, size * 0.0005)
         method_results = [r for r in self.results if r.method == method and r.success]
@@ -146,10 +141,9 @@ class EnhancedScalabilityProofGenerator:
             return largest.peak_memory_mb * (size_ratio ** 1.1)
 
     def run_memory_monitored_test(self, size: int, method: str) -> ScalabilityResult:
-        """Run test with comprehensive memory monitoring"""
-        self._log(f"\n{'='*60}")
+        self._log(f"\n{'=' * 60}")
         self._log(f"Testing {method.upper()} method with {size:,} documents")
-        self._log(f"{'='*60}")
+        self._log(f"{'=' * 60}")
         estimated_memory = self.estimate_memory_needs(size, method)
         self._log(f"Estimated memory needed: {estimated_memory:.1f} MB")
         self._log(f"Memory limit: {self.safe_memory_limit_mb:.1f} MB")
@@ -177,6 +171,7 @@ class EnhancedScalabilityProofGenerator:
             )
         peak_memory = memory_before
         memory_exceeded = False
+
         def memory_monitor():
             nonlocal peak_memory, memory_exceeded
             while True:
@@ -190,6 +185,7 @@ class EnhancedScalabilityProofGenerator:
                     time.sleep(0.5)
                 except:
                     return
+
         monitor_thread = threading.Thread(target=memory_monitor, daemon=True)
         monitor_thread.start()
         try:
@@ -233,7 +229,7 @@ class EnhancedScalabilityProofGenerator:
             )
             self._log(f"SUCCESS: {processing_time:.2f}s, {memory_used:.1f}MB used, {num_clusters:,} clusters")
             self._log(f"Throughput: {throughput:.1f} docs/sec")
-            self._log(f"Memory efficiency: {memory_used/size:.4f} MB/doc")
+            self._log(f"Memory efficiency: {memory_used / size:.4f} MB/doc")
             return result
         except MemoryError as e:
             processing_time = time.time() - start_time
@@ -265,11 +261,10 @@ class EnhancedScalabilityProofGenerator:
             self.force_memory_cleanup()
 
     def run_breaking_point_analysis(self) -> Dict:
-        """Find actual breaking points for both methods"""
-        self._log("\n" + "="*80)
+        self._log("\n" + "=" * 80)
         self._log("BREAKING POINT ANALYSIS - FINDING REAL LIMITS")
-        self._log("="*80)
-        test_sizes = self.generate_test_sizes(start=1000, growth_factor=2, max_size=130_000)
+        self._log("=" * 80)
+        test_sizes = self.generate_test_sizes(start=1000, growth_factor=2, max_size=len(self.real_documents))
         self._log(f"Generated test sizes: {test_sizes}")
         optimized_results = []
         streaming_results = []
@@ -282,20 +277,20 @@ class EnhancedScalabilityProofGenerator:
                 if not opt_result.success:
                     self.optimized_failed = True
                     self.optimized_failure_size = size
-                    self._log(f"\n🚫 OPTIMIZED METHOD FAILED AT {size:,} DOCUMENTS")
+                    self._log(f"\nOptimized method failed at {size:,} documents")
                     self._log(f"Failure reason: {opt_result.failure_reason}")
                     break
                 else:
-                    self._log(f"✅ Optimized method succeeded at {size:,}")
+                    self._log(f"Optimized method succeeded at {size:,}")
             stream_result = self.run_memory_monitored_test(size, "streaming")
             streaming_results.append(stream_result)
             self.results.append(stream_result)
             if not stream_result.success:
-                self._log(f"🚫 STREAMING METHOD ALSO FAILED AT {size:,}")
+                self._log(f"Streaming method also failed at {size:,}")
                 self._log(f"Failure reason: {stream_result.failure_reason}")
                 break
             else:
-                self._log(f"✅ Streaming method succeeded at {size:,}")
+                self._log(f"Streaming method succeeded at {size:,}")
         return {
             "optimized_results": optimized_results,
             "streaming_results": streaming_results,
@@ -305,13 +300,13 @@ class EnhancedScalabilityProofGenerator:
         }
 
     def calculate_complexity_metrics(self) -> Dict:
-        """Calculate empirical complexity from results"""
         if len(self.results) < 4:
             return {"error": "Insufficient data for complexity analysis"}
         opt_successful = [r for r in self.results if r.method == "optimized" and r.success]
         stream_successful = [r for r in self.results if r.method == "streaming" and r.success]
         if len(opt_successful) < 3 or len(stream_successful) < 3:
             return {"error": "Need at least 3 successful results per method"}
+
         def fit_power_law(sizes, values):
             try:
                 log_sizes = np.log10(sizes)
@@ -320,6 +315,7 @@ class EnhancedScalabilityProofGenerator:
                 return coeffs[0]
             except:
                 return None
+
         opt_sizes = np.array([r.dataset_size for r in opt_successful])
         opt_times = np.array([r.processing_time for r in opt_successful])
         opt_memories = np.array([r.peak_memory_mb for r in opt_successful])
@@ -334,7 +330,6 @@ class EnhancedScalabilityProofGenerator:
         }
 
     def statistical_analysis(self) -> Dict:
-        """Perform comprehensive statistical analysis"""
         opt_successful = [r for r in self.results if r.method == "optimized" and r.success]
         stream_successful = [r for r in self.results if r.method == "streaming" and r.success]
         if len(opt_successful) < 3 or len(stream_successful) < 3:
@@ -361,7 +356,8 @@ class EnhancedScalabilityProofGenerator:
                 "optimized_std": np.std(opt_memory_per_doc),
                 "p_value": memory_p,
                 "streaming_more_efficient": np.mean(stream_memory_per_doc) < np.mean(opt_memory_per_doc),
-                "efficiency_improvement": (np.mean(opt_memory_per_doc) - np.mean(stream_memory_per_doc)) / np.mean(opt_memory_per_doc) * 100
+                "efficiency_improvement": (np.mean(opt_memory_per_doc) - np.mean(stream_memory_per_doc)) / np.mean(
+                    opt_memory_per_doc) * 100
             },
             "throughput": {
                 "streaming_mean_docs_per_sec": np.mean(stream_throughput),
@@ -373,9 +369,8 @@ class EnhancedScalabilityProofGenerator:
         }
 
     def generate_comprehensive_report(self, breaking_point_data: Dict,
-                                    complexity_data: Dict,
-                                    statistical_data: Dict) -> str:
-        """Generate detailed analysis report"""
+                                      complexity_data: Dict,
+                                      statistical_data: Dict) -> str:
         report = []
         report.append("COMPREHENSIVE SCALABILITY ANALYSIS REPORT")
         report.append("=" * 80)
@@ -420,7 +415,7 @@ class EnhancedScalabilityProofGenerator:
             report.append("SCALABILITY COMPARISON")
             report.append("-" * 40)
             if scalability_factor > 1:
-                report.append(f"✓ Streaming method processed {scalability_factor:.1f}x larger datasets")
+                report.append(f"Streaming method processed {scalability_factor:.1f}x larger datasets")
             else:
                 report.append(f"Both methods reached similar maximum sizes")
         if "optimized_time_complexity" in complexity_data:
@@ -439,8 +434,10 @@ class EnhancedScalabilityProofGenerator:
             report.append("-" * 40)
             mem_data = statistical_data["memory_efficiency"]
             report.append(f"Memory Efficiency:")
-            report.append(f"  - Optimized: {mem_data['optimized_mean_mb_per_doc']:.6f} ± {mem_data['optimized_std']:.6f} MB/doc")
-            report.append(f"  - Streaming: {mem_data['streaming_mean_mb_per_doc']:.6f} ± {mem_data['streaming_std']:.6f} MB/doc")
+            report.append(
+                f"  - Optimized: {mem_data['optimized_mean_mb_per_doc']:.6f} ± {mem_data['optimized_std']:.6f} MB/doc")
+            report.append(
+                f"  - Streaming: {mem_data['streaming_mean_mb_per_doc']:.6f} ± {mem_data['streaming_std']:.6f} MB/doc")
             if mem_data['streaming_more_efficient']:
                 report.append(f"  - Streaming is {mem_data['efficiency_improvement']:.1f}% more memory efficient")
             report.append(f"  - Statistical significance (p-value): {mem_data['p_value']:.6f}")
@@ -448,18 +445,18 @@ class EnhancedScalabilityProofGenerator:
         report.append("CONCLUSIONS")
         report.append("-" * 40)
         if opt_break and max_stream > opt_break:
-            report.append("1. ✓ SCALABILITY: Streaming method handles larger datasets")
-            report.append("2. ✓ ROBUSTNESS: Streaming method more resistant to memory issues")
-            report.append("3. ✓ PRODUCTION READY: Streaming recommended for large-scale deployments")
-        if "memory_efficiency" in statistical_data and statistical_data["memory_efficiency"]["streaming_more_efficient"]:
-            report.append("4. ✓ MEMORY EFFICIENCY: Streaming uses memory more efficiently")
+            report.append("1. SCALABILITY: Streaming method handles larger datasets")
+            report.append("2. ROBUSTNESS: Streaming method more resistant to memory issues")
+            report.append("3. PRODUCTION READY: Streaming recommended for large-scale deployments")
+        if "memory_efficiency" in statistical_data and statistical_data["memory_efficiency"][
+            "streaming_more_efficient"]:
+            report.append("4. MEMORY EFFICIENCY: Streaming uses memory more efficiently")
         if not opt_break:
             report.append("1. INCONCLUSIVE: No clear breaking point found for optimized method")
             report.append("2. RECOMMENDATION: Extend testing to larger dataset sizes")
         return "\n".join(report)
 
     def create_visualizations(self, output_folder: str):
-        """Create comprehensive visualizations and save to folder"""
         if not self.results:
             self._log("No results to visualize")
             return
@@ -478,15 +475,19 @@ class EnhancedScalabilityProofGenerator:
 
         fig, axes = plt.subplots(2, 2, figsize=(16, 12))
         fig.suptitle('Scalability Analysis: Real Breaking Point Testing', fontsize=16, fontweight='bold')
+
+        colorblind_colors = {'optimized': '#0173B2', 'streaming': '#DE8F05'}
+
         for method in df['Method'].unique():
             method_data = df[df['Method'] == method]
-            color = 'blue' if method == 'optimized' else 'red'
+            color = colorblind_colors[method]
             marker = 'o' if method == 'optimized' else 's'
+            linestyle = '-' if method == 'optimized' else '--'
             axes[0, 0].loglog(method_data['Dataset Size'], method_data['Peak Memory (MB)'],
-                     marker=marker, linestyle='-', label=f'{method.title()}',
-                     linewidth=2, markersize=8, color=color, alpha=0.8)
-        axes[0, 0].axhline(y=self.safe_memory_limit_mb, color='orange', linestyle='--',
-                  label=f'Memory Limit ({self.memory_limit_percent*100:.0f}%)', alpha=0.8, linewidth=2)
+                              marker=marker, linestyle=linestyle, label=f'{method.title()}',
+                              linewidth=2, markersize=8, color=color)
+        axes[0, 0].axhline(y=self.safe_memory_limit_mb, color='red', linestyle=':',
+                           label=f'Memory Limit ({self.memory_limit_percent * 100:.0f}%)', linewidth=2)
         axes[0, 0].set_xlabel('Dataset Size (documents)')
         axes[0, 0].set_ylabel('Peak Memory Usage (MB)')
         axes[0, 0].set_title('Memory Scaling Comparison')
@@ -495,11 +496,12 @@ class EnhancedScalabilityProofGenerator:
 
         for method in df['Method'].unique():
             method_data = df[df['Method'] == method]
-            color = 'blue' if method == 'optimized' else 'red'
+            color = colorblind_colors[method]
             marker = 'o' if method == 'optimized' else 's'
+            linestyle = '-' if method == 'optimized' else '--'
             axes[0, 1].loglog(method_data['Dataset Size'], method_data['Processing Time (s)'],
-                     marker=marker, linestyle='-', label=f'{method.title()}',
-                     linewidth=2, markersize=8, color=color, alpha=0.8)
+                              marker=marker, linestyle=linestyle, label=f'{method.title()}',
+                              linewidth=2, markersize=8, color=color)
         axes[0, 1].set_xlabel('Dataset Size (documents)')
         axes[0, 1].set_ylabel('Processing Time (seconds)')
         axes[0, 1].set_title('Time Scaling Comparison')
@@ -508,11 +510,12 @@ class EnhancedScalabilityProofGenerator:
 
         for method in df['Method'].unique():
             method_data = df[df['Method'] == method]
-            color = 'blue' if method == 'optimized' else 'red'
+            color = colorblind_colors[method]
             marker = 'o' if method == 'optimized' else 's'
+            linestyle = '-' if method == 'optimized' else '--'
             axes[1, 0].semilogx(method_data['Dataset Size'], method_data['Memory per Doc (MB)'],
-                       marker=marker, linestyle='-', label=f'{method.title()}',
-                       linewidth=2, markersize=8, color=color, alpha=0.8)
+                                marker=marker, linestyle=linestyle, label=f'{method.title()}',
+                                linewidth=2, markersize=8, color=color)
         axes[1, 0].set_xlabel('Dataset Size (documents)')
         axes[1, 0].set_ylabel('Memory per Document (MB)')
         axes[1, 0].set_title('Memory Efficiency Comparison')
@@ -520,18 +523,21 @@ class EnhancedScalabilityProofGenerator:
         axes[1, 0].grid(True, alpha=0.3)
 
         plt.tight_layout()
-        plt.savefig(os.path.join(output_folder, 'scalability_analysis.png'))
+        plt.savefig(os.path.join(output_folder, 'scalability_analysis.png'), dpi=300)
         plt.close()
 
         fig, axes = plt.subplots(4, 1, figsize=(10, 16), sharex=False)
         metrics = ["Processing Time (s)", "Throughput (docs/s)", "Peak Memory (MB)", "Memory per Doc (MB)"]
-        colors = {"optimized": "tab:blue", "streaming": "tab:orange"}
 
         for ax, metric in zip(axes, metrics):
             for method in df['Method'].unique():
                 method_data = df[df['Method'] == method]
+                color = colorblind_colors[method]
+                marker = 'o' if method == 'optimized' else 's'
+                linestyle = '-' if method == 'optimized' else '--'
                 ax.plot(method_data['Dataset Size'], method_data[metric],
-                        marker='o', label=method.title(), color=colors[method])
+                        marker=marker, linestyle=linestyle, label=method.title(),
+                        color=color, linewidth=2, markersize=8)
             ax.set_ylabel(metric)
             ax.set_xlabel("Dataset Size (documents)")
             ax.legend()
@@ -539,17 +545,20 @@ class EnhancedScalabilityProofGenerator:
 
         plt.suptitle("Performance Comparison: Optimized vs Streaming", fontsize=14, weight="bold")
         plt.tight_layout(rect=[0, 0, 1, 0.97])
-        plt.savefig(os.path.join(output_folder, 'performance_comparison.png'))
+        plt.savefig(os.path.join(output_folder, 'performance_comparison.png'), dpi=300)
         plt.close()
 
+
 if __name__ == "__main__":
-    csv_path = "../test.csv"
+    # csv_path = "../test.csv"
+
+    csv_path = "../papyri_sentences_no_gaps_clean.csv"
     output_folder = os.path.join(script_dir, "benchmark_performance_results")
     os.makedirs(output_folder, exist_ok=True)
     log_file = os.path.join(output_folder, "scalability_log.txt")
 
     with open(log_file, 'w') as f:
-        f.write("Scalability Benchmark Log\n" + "="*50 + "\n")
+        f.write("Scalability Benchmark Log\n" + "=" * 50 + "\n")
 
     benchmark = EnhancedScalabilityProofGenerator(csv_path, log_file=log_file)
     breaking_points = benchmark.run_breaking_point_analysis()
@@ -557,12 +566,10 @@ if __name__ == "__main__":
     stats = benchmark.statistical_analysis()
     report = benchmark.generate_comprehensive_report(breaking_points, complexity, stats)
 
-    # Save report to file
     report_path = os.path.join(output_folder, "scalability_report.txt")
     with open(report_path, "w") as f:
         f.write(report)
     benchmark._log(f"Report saved to: {report_path}")
 
-    # Save visualizations
     benchmark.create_visualizations(output_folder)
     benchmark._log(f"Visualizations saved to: {output_folder}")

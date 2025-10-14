@@ -716,7 +716,7 @@ def main():
                     yaxis_title="Number of Documents",
                     height=400
                 )
-                st.plotly_chart(fig, width='stretch')
+                st.plotly_chart(fig, use_container_width=True, key="confidence_histogram")
 
                 fig2 = go.Figure(data=[
                     go.Bar(
@@ -731,7 +731,7 @@ def main():
                     yaxis_title="Number of Documents",
                     height=400
                 )
-                st.plotly_chart(fig2, width='stretch')
+                st.plotly_chart(fig, use_container_width=True, key="cluster_sizes_bar")
 
         with tab4:
             col1, col2 = st.columns(2)

@@ -39,7 +39,7 @@ def create_plotly_network(G: nx.Graph, layout_type: str = "spring", theme: str =
         edge_color = 'rgba(128, 128, 128, 0.4)'
         annotation_color = 'gray'
         marker_line_color = 'white'
-    else:  # light theme
+    else:
         bg_color = 'rgba(255, 255, 255, 1)'
         font_color = 'black'
         edge_color = 'rgba(100, 100, 100, 0.3)'
@@ -75,7 +75,7 @@ def create_plotly_network(G: nx.Graph, layout_type: str = "spring", theme: str =
                 node_colors.append('rgba(255, 193, 7, 0.8)')
             else:
                 node_colors.append('rgba(244, 67, 54, 0.8)')
-        else:  # light theme
+        else:
             if confidence >= 0.75:
                 node_colors.append('rgba(76, 175, 80, 0.9)')
             elif confidence >= 0.6:

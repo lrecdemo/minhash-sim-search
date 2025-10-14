@@ -6,7 +6,8 @@ from typing import List
 import networkx as nx
 from typing import Tuple
 
-def create_plotly_network(G: nx.Graph, layout_type: str = "spring") -> go.Figure:
+
+def create_plotly_network(G: nx.Graph, layout_type: str = "spring", theme: str = "light") -> go.Figure:
     if layout_type == "spring":
         k_value = max(1, len(G.nodes()) ** 0.5 / 10)
         iterations = min(100, max(30, len(G.nodes()) * 2))
@@ -32,6 +33,20 @@ def create_plotly_network(G: nx.Graph, layout_type: str = "spring") -> go.Figure
     base_size = max(8, min(20, 100 / len(G.nodes()) ** 0.3)) if len(G.nodes()) > 0 else 15
     max_additional_size = max(5, min(25, 150 / len(G.nodes()) ** 0.3)) if len(G.nodes()) > 0 else 20
 
+    if theme == "dark":
+        bg_color = 'rgba(20, 20, 30, 0.9)'
+        font_color = 'white'
+        edge_color = 'rgba(128, 128, 128, 0.4)'
+        annotation_color = 'gray'
+        marker_line_color = 'white'
+    else:  # light theme
+        bg_color = 'rgba(255, 255, 255, 1)'
+        font_color = 'black'
+        edge_color = 'rgba(100, 100, 100, 0.3)'
+        annotation_color = 'darkgray'
+        marker_line_color = 'black'
+
+
     for node in G.nodes():
         x, y = pos[node]
         node_x.append(x)
@@ -53,12 +68,21 @@ def create_plotly_network(G: nx.Graph, layout_type: str = "spring") -> go.Figure
                          f"Batch: {batch_id}<br>"
                          f"Preview: {text_preview}")
 
-        if confidence >= 0.8:
-            node_colors.append('rgba(46, 125, 50, 0.8)')
-        elif confidence >= 0.6:
-            node_colors.append('rgba(255, 193, 7, 0.8)')
-        else:
-            node_colors.append('rgba(244, 67, 54, 0.8)')
+        # Set node colors based on confidence and theme
+        if theme == "dark":
+            if confidence >= 0.8:
+                node_colors.append('rgba(46, 125, 50, 0.8)')
+            elif confidence >= 0.6:
+                node_colors.append('rgba(255, 193, 7, 0.8)')
+            else:
+                node_colors.append('rgba(244, 67, 54, 0.8)')
+        else:  # light theme
+            if confidence >= 0.75:
+                node_colors.append('rgba(76, 175, 80, 0.9)')
+            elif confidence >= 0.6:
+                node_colors.append('rgba(255, 152, 0, 0.9)')
+            else:
+                node_colors.append('rgba(244, 67, 54, 0.9)')
 
         if max_degree > min_degree:
             normalized_degree = (connections - min_degree) / (max_degree - min_degree)
@@ -66,6 +90,7 @@ def create_plotly_network(G: nx.Graph, layout_type: str = "spring") -> go.Figure
             normalized_degree = 0.5
         node_size = base_size + (normalized_degree * max_additional_size)
         node_sizes.append(node_size)
+
     edge_x, edge_y = [], []
     edge_weights = []
 
@@ -77,44 +102,31 @@ def create_plotly_network(G: nx.Graph, layout_type: str = "spring") -> go.Figure
 
         weight = G.edges[edge].get('weight', 0)
         edge_weights.append(weight)
-    fig = go.Figure()
-    if edge_weights:
-        min_weight = min(edge_weights) if edge_weights else 0
-        max_weight = max(edge_weights) if edge_weights else 1
-        edge_opacity = 0.3 + 0.4 * ((np.array(edge_weights) - min_weight) /
-                                    (max_weight - min_weight) if max_weight > min_weight else 0.5)
-        edge_width = 0.5 + 2 * ((np.array(edge_weights) - min_weight) /
-                                (max_weight - min_weight) if max_weight > min_weight else 0.5)
 
-        fig.add_trace(go.Scatter(
-            x=edge_x, y=edge_y,
-            line=dict(width=1, color='rgba(128, 128, 128, 0.4)'),
-            hoverinfo='none',
-            mode='lines',
-            showlegend=False
-        ))
-    else:
-        fig.add_trace(go.Scatter(
-            x=edge_x, y=edge_y,
-            line=dict(width=1, color='rgba(128, 128, 128, 0.3)'),
-            hoverinfo='none',
-            mode='lines',
-            showlegend=False
-        ))
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=edge_x, y=edge_y,
+        line=dict(width=1, color=edge_color),
+        hoverinfo='none',
+        mode='lines',
+        showlegend=False
+    ))
+
     fig.add_trace(go.Scatter(
         x=node_x, y=node_y,
         mode='markers+text',
         marker=dict(
             size=node_sizes,
             color=node_colors,
-            line=dict(width=1, color='white'),
+            line=dict(width=1, color=marker_line_color),
             opacity=0.8
         ),
         text=node_text,
         textposition="middle center",
         textfont=dict(
             size=max(8, min(12, 60 / len(G.nodes()) ** 0.3)) if len(G.nodes()) > 0 else 10,
-            color='white',
+            color=font_color,
             family="Arial Black"
         ),
         hovertemplate='%{customdata}<extra></extra>',
@@ -134,18 +146,17 @@ def create_plotly_network(G: nx.Graph, layout_type: str = "spring") -> go.Figure
             xref="paper", yref="paper",
             x=0.005, y=-0.002,
             xanchor='left', yanchor='bottom',
-            font=dict(color='gray', size=10)
+            font=dict(color=annotation_color, size=10)
         )],
         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        plot_bgcolor='rgba(20, 20, 30, 0.9)',
-        paper_bgcolor='rgba(20, 20, 30, 0.9)',
-        font=dict(color='white'),
+        plot_bgcolor=bg_color,
+        paper_bgcolor=bg_color,
+        font=dict(color=font_color),
         height=600
     )
 
     return fig
-
 def create_document_graph_from_clustering(docs_df: pd.DataFrame,
                                           clustering_similarities: List[Tuple[int, int, float]],
                                           similarity_threshold: float = 0.3):
@@ -184,6 +195,8 @@ def create_document_graph_from_clustering(docs_df: pd.DataFrame,
 def display_cluster_details(df: pd.DataFrame, cluster_id: int):
     cluster_docs = df[df['cluster_id'] == cluster_id].copy()
 
+    in_search_context = st.session_state.get('in_search_context', False)
+
     col1, col2 = st.columns([3, 1])
     with col1:
         st.markdown(f"# Cluster {cluster_id} - All Documents")
@@ -193,9 +206,10 @@ def display_cluster_details(df: pd.DataFrame, cluster_id: int):
         st.markdown(
             f"**{len(cluster_docs)} documents • {cluster_docs['certainty'].mean():.0%} avg confidence**")
     with col2:
-        if st.button("← Back to Overview", type="secondary"):
-            st.session_state.view_mode = 'overview'
-            st.rerun()
+        if not in_search_context:
+            if st.button("← Back to Overview", type="secondary", key=f"back_to_overview_{cluster_id}"):
+                st.session_state.view_mode = 'overview'
+                st.rerun()
 
     view_mode = st.radio(
         "",
@@ -209,7 +223,7 @@ def display_cluster_details(df: pd.DataFrame, cluster_id: int):
             st.warning(
                 f"Large cluster ({len(cluster_docs)} documents). Graph may be slow to render. Consider using List View or increasing the similarity threshold.")
 
-        graph_col1, graph_col2 = st.columns([2, 2])
+        graph_col1, graph_col2, graph_col3 = st.columns([2, 2, 1])
 
         with graph_col1:
             default_threshold = 0.5 if len(cluster_docs) > 100 else 0.3
@@ -243,6 +257,13 @@ def display_cluster_details(df: pd.DataFrame, cluster_id: int):
                 help=help_text,
                 key=f"layout_type_{cluster_id}"
             )
+        with graph_col3:
+            theme = st.selectbox(
+                "Theme",
+                ["dark", "light"],
+                format_func=lambda x: x.capitalize(),
+                key=f"theme_{cluster_id}"
+            )
 
         if len(cluster_docs) > 1:
             try:
@@ -261,7 +282,7 @@ def display_cluster_details(df: pd.DataFrame, cluster_id: int):
                         st.warning(
                             f"No connections found at {similarity_threshold} threshold. Try lowering the threshold.")
                     else:
-                        fig = create_plotly_network(G, layout_type)
+                        fig = create_plotly_network(G, layout_type,theme)
                         st.plotly_chart(fig, use_container_width=True)
 
                 st.markdown("#### Network Statistics")

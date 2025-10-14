@@ -157,7 +157,7 @@ def run_clustering_analysis(texts: List[str], threshold: float, shingle_size: in
                 for doc1, doc2, sim in all_similarities
             }
 
-            clustered_docs = build_clustered_documents_fast(
+            clustered_docs = build_clustered_documents(
                 texts, cluster_results, similarity_dict,
                 clustering_service.chunk_size, progress_callback
             )
@@ -186,9 +186,9 @@ def run_clustering_analysis(texts: List[str], threshold: float, shingle_size: in
         st.error(f"Clustering failed: {str(e)}")
         return None, logger
 
-def build_clustered_documents_fast(texts: List[str], cluster_results: Dict[int, int],
-                                   similarity_dict: Dict[Tuple[int, int], float],
-                                   chunk_size: int, progress_callback=None) -> List[ClusteredDocument]:
+def build_clustered_documents(texts: List[str], cluster_results: Dict[int, int],
+                              similarity_dict: Dict[Tuple[int, int], float],
+                              chunk_size: int, progress_callback=None) -> List[ClusteredDocument]:
 
     clusters_to_docs = defaultdict(list)
     for doc_id, cluster_id in cluster_results.items():

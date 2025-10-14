@@ -68,7 +68,6 @@ def display_global_search(df: pd.DataFrame):
                             f"View all {len(group)} results from Cluster {cluster_id}",
                             key=button_key
                     ):
-                        # Set flags to show cluster details in this tab
                         st.session_state.search_viewing_cluster = True
                         st.session_state.search_selected_cluster = cluster_id
                         st.rerun()

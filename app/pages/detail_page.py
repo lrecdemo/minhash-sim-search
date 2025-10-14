@@ -68,7 +68,6 @@ def create_plotly_network(G: nx.Graph, layout_type: str = "spring", theme: str =
                          f"Batch: {batch_id}<br>"
                          f"Preview: {text_preview}")
 
-        # Set node colors based on confidence and theme
         if theme == "dark":
             if confidence >= 0.8:
                 node_colors.append('rgba(46, 125, 50, 0.8)')

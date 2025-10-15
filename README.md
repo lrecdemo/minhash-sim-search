@@ -26,8 +26,8 @@ Historical Texts Using MinHash-LSH", submitted for LREC2026.
 
 For running the quality benchmark, ```cd``` to the benchmark folder and run ```python benchmark_quality.py```. 
 
-For running the performance benchmark, modify the path to the performance benchmark .csv in ```benchmark_performance.py```. The original dataset used in the paper was based upon the Integrating Digital Papyrology project (https://github.com/papyri/idp.data) but could not be included due to size and licensing constraints.
-
+Before running the performance benchmark, first run  ```build_performance_dataset.py```, wich will build a .csv file with papyrus sentences from <a href="https://github.com/alekkeersmaekers/duke-nlp">Duke NLP</a>, 
+large enough to run the benchmark with. Next, run ```benchmark_performance.py```.
 
 ### Usage
 

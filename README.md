@@ -12,7 +12,7 @@ Historical Texts Using MinHash-LSH", submitted for LREC2026.
 2. Generate a new virtual environment.
 3. Install dependencies: ```pip install -r app/requirements.txt```
 4. ```cd app```
-5. Run the application" ```streamlit run main.py```
+5. Run the application: ```streamlit run main.py```
 6. Access the interface at http://localhost:8501
 
 

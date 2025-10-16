@@ -69,8 +69,8 @@ def calculate_cluster_purities(labels, pred_labels):
     }
 
 
-def run_clustering_experiment_enhanced(texts, labels, experiment_name, method='optimized',
-                                       preprocess_options=None):
+def run_clustering_experiment(texts, labels, experiment_name, method='in_mem',
+                              preprocess_options=None):
     print(f"\nRunning {experiment_name} experiment with {method} method...")
 
     shingle_sizes = [2, 3, 4, 5, 6]
@@ -85,7 +85,7 @@ def run_clustering_experiment_enhanced(texts, labels, experiment_name, method='o
 
             print(f"  Processing shingle_size={shingle_size}, threshold={threshold}")
 
-            if method == 'optimized':
+            if method == 'in_mem':
                 clustering = MemMinhashLSHClustering(
                     threshold=threshold,
                     shingle_size=shingle_size,
@@ -313,11 +313,11 @@ if __name__ == "__main__":
     print("\n" + "=" * 80)
     print("ORIGINAL TEXT - NO PREPROCESSING")
     print("=" * 80)
-    all_results['Original Text (No Preprocessing)']['Optimized'] = run_clustering_experiment_enhanced(
-        texts, labels, "Original Text - Optimized",
-        method='optimized', preprocess_options=no_preprocessing
+    all_results['Original Text (No Preprocessing)']['In_Mem'] = run_clustering_experiment(
+        texts, labels, "Original Text - In_Mem",
+        method='in_mem', preprocess_options=no_preprocessing
     )
-    all_results['Original Text (No Preprocessing)']['Streaming'] = run_clustering_experiment_enhanced(
+    all_results['Original Text (No Preprocessing)']['Streaming'] = run_clustering_experiment(
         texts, labels, "Original Text - Streaming",
         method='streaming', preprocess_options=no_preprocessing
     )
@@ -325,11 +325,11 @@ if __name__ == "__main__":
     print("\n" + "=" * 80)
     print("PREPROCESSED TEXT - FULL PREPROCESSING")
     print("=" * 80)
-    all_results['Preprocessed Text (Full Preprocessing)']['Optimized'] = run_clustering_experiment_enhanced(
-        texts, labels, "Preprocessed Text - Optimized",
-        method='optimized', preprocess_options=full_preprocessing
+    all_results['Preprocessed Text (Full Preprocessing)']['In_Mem'] = run_clustering_experiment(
+        texts, labels, "Preprocessed Text - In_Mem",
+        method='in_mem', preprocess_options=full_preprocessing
     )
-    all_results['Preprocessed Text (Full Preprocessing)']['Streaming'] = run_clustering_experiment_enhanced(
+    all_results['Preprocessed Text (Full Preprocessing)']['Streaming'] = run_clustering_experiment(
         texts, labels, "Preprocessed Text - Streaming",
         method='streaming', preprocess_options=full_preprocessing
     )
